@@ -5,6 +5,8 @@
 #include <QDebug>
 #include <QKeyEvent>
 #include <QMimeData>
+#include <functional>
+#include <qnamespace.h>
 
 namespace gui {
 
@@ -139,10 +141,11 @@ bool ModuleBrowser::eventFilter(QObject *object, QEvent *event)
     static QMetaObject::Connection conn;
     static QKeyEvent down{QEvent::Type::KeyPress, Qt::Key_Down, Qt::NoModifier};
     if (object == filterEdit()) {
-        if (event->type() == QEvent::FocusIn) {
+        const auto &type = event->type();
+        if (type == QEvent::FocusIn) {
             filterInFocus = true;
         }
-        if (event->type() == QEvent::FocusOut) {
+        if (type == QEvent::FocusOut) {
             filterInFocus = false;
         }
         // bring up your custom edit
@@ -155,22 +158,25 @@ void ModuleBrowser::keyPressEvent(QKeyEvent *event)
 {
     if (filterInFocus) {
         if (event->type() == QEvent::KeyPress) {
-            if (event->key() == Qt::Key_Down) {
-                selectNextModule();
-            } else if (event->key() == Qt::Key_Up) {
-                selectPreviousModule();
-            } else if (event->key() == Qt::Key_Insert) {
+            switch (event->key()) {
+            case Qt::Key_Down:
+                selectLowerModule();
+                break;
+            case Qt::Key_Up:
+                selectUpperModule();
+                break;
+            case Qt::Key_Insert:
                 if (currentModule.exists) {
                     emit startModule(currentModule.hostIter->first,
                                      currentModule.hostIter->second->child(currentModule.moduleIndex)->text(0));
                 }
+                break;
             }
         }
     }
 }
 
-
-void ModuleBrowser::selectNextModule()
+void ModuleBrowser::selectModule(bool selectFirst, const std::function<void(bool &, SelectedModule &)> &iterFunc)
 {
     if (!currentModule.exists) {
         selectFirstModule(true);
@@ -180,53 +186,42 @@ void ModuleBrowser::selectNextModule()
     auto old = currentModule;
     bool found = false;
     do {
+        iterFunc(found, old);
+        if (!currentModule.hostIter->second->child(currentModule.moduleIndex)->isHidden())
+            found = true;
+    } while (!(currentModule.hostIter == old.hostIter && currentModule.moduleIndex == old.moduleIndex) && !found);
+    if (found) {
+        setCurrentModuleSelected(true);
+    } else {
+        selectFirstModule(selectFirst);
+    }
+}
+
+void ModuleBrowser::selectLowerModule()
+{
+    const std::function<void(bool &, SelectedModule &)> &nextFunc = [=](bool &found, SelectedModule &old) {
         ++currentModule.moduleIndex;
         if (currentModule.moduleIndex == currentModule.hostIter->second->childCount()) {
             currentModule.moduleIndex = 0;
             ++currentModule.hostIter;
-            if (currentModule.hostIter == hubItems.end()) {
+            if (currentModule.hostIter == hubItems.end())
                 currentModule.hostIter = hubItems.begin();
-            }
         }
-        if (!currentModule.hostIter->second->child(currentModule.moduleIndex)->isHidden()) {
-            found = true;
-            break;
-        }
-
-    } while (!(currentModule.hostIter == old.hostIter && currentModule.moduleIndex == old.moduleIndex));
-    if (found) {
-        setCurrentModuleSelected(true);
-    } else {
-        selectFirstModule(true);
-    }
+    };
+    selectModule(true, nextFunc);
 }
 
-void ModuleBrowser::selectPreviousModule()
+void ModuleBrowser::selectUpperModule()
 {
-    if (!currentModule.exists) {
-        selectFirstModule(true);
-        return;
-    }
-    setCurrentModuleSelected(false);
-    auto old = currentModule;
-    bool found = false;
-    do {
+    const std::function<void(bool &, SelectedModule &)> &prevFunc = [=](bool &found, SelectedModule &old) {
         --currentModule.moduleIndex;
         if (currentModule.moduleIndex < 0) {
             currentModule.hostIter == hubItems.begin() ? currentModule.hostIter = --hubItems.end()
                                                        : --currentModule.hostIter;
             currentModule.moduleIndex = currentModule.hostIter->second->childCount() - 1;
         }
-        if (!currentModule.hostIter->second->child(currentModule.moduleIndex)->isHidden()) {
-            found = true;
-            break;
-        }
-    } while (!(currentModule.hostIter == old.hostIter && currentModule.moduleIndex == old.moduleIndex));
-    if (found) {
-        setCurrentModuleSelected(true);
-    } else {
-        selectFirstModule(false);
-    }
+    };
+    selectModule(false, prevFunc);
 }
 
 void ModuleBrowser::selectFirstModule(bool first)
@@ -247,6 +242,4 @@ void ModuleBrowser::setCurrentModuleSelected(bool select)
     currentModule.hostIter->second->child(currentModule.moduleIndex)->setSelected(select);
     currentModule.hostIter->second->setExpanded(true);
 }
-
-
 } // namespace gui
