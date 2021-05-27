@@ -45,9 +45,17 @@ using namespace netCDF;
 
 MODULE_MAIN(ReadTsunami)
 
+namespace {
+std::string addIdxToStr(std::string name, int num)
+{
+    std::stringstream str;
+    str << name << num;
+    return str.str();
+}
+} // namespace
 
 ReadTsunami::ReadTsunami(const std::string &name, int moduleID, mpi::communicator comm)
-: vistle::Reader("Read ChEESE Tsunami files", name, moduleID, comm)
+: vistle::Reader("Read ChEESE Tsunami files", name, moduleID, comm), m_numPorts(0)
 {
     // file-browser
     m_filedir = addStringParameter("file_dir", "NC File directory", "/data/ChEESE/tsunami/pelicula_eta.nc",
@@ -72,8 +80,12 @@ ReadTsunami::ReadTsunami(const std::string &name, int moduleID, mpi::communicato
     //bathymetryname
     m_bathy = addStringParameter("bathymetry ", "Select bathymetry stored in netCDF", "", Parameter::Choice);
 
+    //scalar ports and corresponding choice param
+    m_numPortParam = addIntParameter("numPorts", "number of scalar ports", m_numPorts);
+    setParameterRange(m_numPortParam, Integer(0), Integer(10));
+
     //scalar
-    initScalarParamReader();
+    /* initScalarParamReader(); */
 
     // timestep built-in params
     setParameterRange(m_first, Integer(0), Integer(9999999));
@@ -85,6 +97,7 @@ ReadTsunami::ReadTsunami(const std::string &name, int moduleID, mpi::communicato
     observeParameter(m_blocks[0]);
     observeParameter(m_blocks[1]);
     observeParameter(m_verticalScale);
+    observeParameter(m_numPortParam);
 
     setParallelizationMode(ParallelizeBlocks);
 }
@@ -98,22 +111,22 @@ ReadTsunami::~ReadTsunami()
 /**
  * @brief Initialize scalar choice parameter and ports.
  */
-void ReadTsunami::initScalarParamReader()
-{
-    constexpr auto scalar_name{"Scalar "};
-    constexpr auto scalarPort_name{"Scalar port "};
-    constexpr auto scalarPort_descr{"Port for scalar number "};
+/* void ReadTsunami::initScalarParamReader() */
+/* { */
+/*     constexpr auto scalar_name{"Scalar "}; */
+/*     constexpr auto scalarPort_name{"Scalar port "}; */
+/*     constexpr auto scalarPort_descr{"Port for scalar number "}; */
 
-    for (Index i = 0; i < NUM_SCALARS; ++i) {
-        const std::string i_str{std::to_string(i)};
-        const std::string &scName = scalar_name + i_str;
-        const std::string &portName = scalarPort_name + i_str;
-        const std::string &portDescr = scalarPort_descr + i_str;
-        m_scalars[i] = addStringParameter(scName, "Select scalar.", "", Parameter::Choice);
-        m_scalarsOut[i] = createOutputPort(portName, portDescr);
-        observeParameter(m_scalars[i]);
-    }
-}
+/*     for (Index i = 0; i < NUM_SCALARS; ++i) { */
+/*         const std::string i_str{std::to_string(i)}; */
+/*         const std::string &scName = scalar_name + i_str; */
+/*         const std::string &portName = scalarPort_name + i_str; */
+/*         const std::string &portDescr = scalarPort_descr + i_str; */
+/*         m_scalars[i] = addStringParameter(scName, "Select scalar.", "", Parameter::Choice); */
+/*         m_scalarsOut[i] = createOutputPort(portName, portDescr); */
+/*         /1* observeParameter(m_scalars[i]); *1/ */
+/*     } */
+/* } */
 
 /**
  * Open Nc File and set pointer ncDataFile.
@@ -160,6 +173,7 @@ inline void ReadTsunami::printThreadStats() const
     std::cout << std::this_thread::get_id() << '\n';
 }
 
+
 /**
   * Called when any of the reader parameter changing.
   *
@@ -176,6 +190,9 @@ bool ReadTsunami::examine(const vistle::Parameter *param)
             return false;
     }
 
+    if (param == m_numPortParam)
+        return handleScalarGUI();
+
     const int &nBlocks = m_blocks[0]->getValue() * m_blocks[1]->getValue();
     setTimesteps(-1);
     if (nBlocks == size()) {
@@ -185,6 +202,36 @@ bool ReadTsunami::examine(const vistle::Parameter *param)
         sendInfo("Number of blocks should equal MPISIZE.");
         return false;
     }
+}
+
+/**
+ * @brief Dynamic scalar ports and choice paramter adjustment. (Add or delete ports)
+ *
+ * @return True, if everything went well else false;
+ */
+bool ReadTsunami::handleScalarGUI()
+{
+    bool done{true};
+    int numPorts = m_numPortParam->getValue();
+    constexpr auto scalarPortName{"scalar_out "};
+    constexpr auto scalarName{"scalar "};
+
+    //add new ports and parameters
+    for (int i = m_numPorts; i < numPorts; ++i) {
+        m_scalarsOut.push_back(createOutputPort(addIdxToStr(scalarPortName, i)));
+        m_scalars.push_back(addStringParameter(addIdxToStr(scalarName, i), "Select scalar.", "", Parameter::Choice));
+    }
+
+    //if current number of ports > new port number => delete not needed ports and parameters
+    for (int i = numPorts; i < m_numPorts; ++i) {
+        done = done && destroyPort(addIdxToStr(scalarPortName, i));
+        m_scalarsOut.erase(m_scalarsOut.begin() + i);
+
+        done = done && removeParameter(m_scalars[i]);
+        m_scalars.erase(m_scalars.begin() + i);
+    }
+    m_numPorts = numPorts;
+    return done && inspectNetCDFVars();
 }
 
 /**
@@ -198,6 +245,12 @@ bool ReadTsunami::inspectNetCDFVars()
 
     std::vector<std::string> scalarChoiceVec;
     std::vector<std::string> bathyChoiceVec;
+
+    //clear previous choicelists.
+    m_bathy->setChoices(std::vector<std::string>());
+    for (const auto &scalar: m_scalars)
+        scalar->setChoices(std::vector<std::string>());
+
     auto strContains = [](const std::string &name, const std::string &contains) {
         return name.find(contains) != std::string::npos;
     };
@@ -205,14 +258,8 @@ bool ReadTsunami::inspectNetCDFVars()
         if (strContains(name, "grid"))
             m_latLon_Ground[i] = name;
         else
-            m_latLon_Surface[i] = name;
+            m_latLon_Sea[i] = name;
     };
-
-
-    //delete previous choicelists.
-    m_bathy->setChoices(std::vector<std::string>());
-    for (const auto &scalar: m_scalars)
-        scalar->setChoices(std::vector<std::string>());
 
     //read names of scalars
     for (auto &[name, val]: ncFile.getVars()) {
@@ -432,8 +479,8 @@ bool ReadTsunami::computeInitial(Token &token, const T &blockNum)
         return false;
 
     // get nc var objects ref
-    const NcVar &latvar = ncFile.getVar(m_latLon_Surface[0]);
-    const NcVar &lonvar = ncFile.getVar(m_latLon_Surface[1]);
+    const NcVar &latvar = ncFile.getVar(m_latLon_Sea[0]);
+    const NcVar &lonvar = ncFile.getVar(m_latLon_Sea[1]);
     const NcVar &grid_lat = ncFile.getVar(m_latLon_Ground[0]);
     const NcVar &grid_lon = ncFile.getVar(m_latLon_Ground[1]);
     const NcVar &bathymetryvar = ncFile.getVar(m_bathy->getValue());
@@ -520,7 +567,8 @@ bool ReadTsunami::computeInitial(Token &token, const T &blockNum)
     const std::vector<size_t> vecScalarStart{latSea.start, lonSea.start};
     const std::vector<size_t> vecScalarCount{latSea.count, lonSea.count};
     std::vector<float> vecScalar(verticesGround);
-    for (size_t i = 0; i < NUM_SCALARS; ++i) {
+    /* for (size_t i = 0; i < NUM_SCALARS; ++i) { */
+    for (size_t i = 0; i < m_numPorts; ++i) {
         if (!m_scalarsOut[i]->isConnected())
             continue;
         const auto &scName = m_scalars[i]->getValue();
@@ -589,7 +637,8 @@ bool ReadTsunami::computeTimestep(Token &token, const T &blockNum, const U &time
     ptr_timestepPoly->setBlock(blockNum);
 
     //add scalar to ports
-    for (size_t i = 0; i < NUM_SCALARS; ++i) {
+    /* for (size_t i = 0; i < NUM_SCALARS; ++i) { */
+    for (size_t i = 0; i < m_numPorts; ++i) {
         if (!m_scalarsOut[i]->isConnected())
             continue;
 

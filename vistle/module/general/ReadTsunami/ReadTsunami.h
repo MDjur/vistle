@@ -16,6 +16,7 @@
 #ifndef _READTSUNAMI_H
 #define _READTSUNAMI_H
 
+#include "vistle/core/parameter.h"
 #include <cstddef>
 #include <vistle/module/reader.h>
 #include <vistle/core/polygons.h>
@@ -26,7 +27,7 @@
 #include <memory>
 
 constexpr int NUM_BLOCKS{2};
-constexpr int NUM_SCALARS{2};
+/* constexpr int NUM_SCALARS{2}; */
 
 class ReadTsunami: public vistle::Reader {
 public:
@@ -89,6 +90,7 @@ private:
     void initScalarParamReader();
     bool openNcFile(netCDF::NcFile &file) const;
     bool inspectNetCDFVars();
+    bool handleScalarGUI();
 
     typedef std::function<float(size_t, size_t)> zCalcFunc;
     template<class U, class T, class V>
@@ -128,23 +130,29 @@ private:
     void printMPIStats() const;
     void printThreadStats() const;
 
+    int m_numPorts;
+    vistle::IntParameter *m_numPortParam;
+
     //Parameter
     vistle::StringParameter *m_filedir = nullptr;
     vistle::StringParameter *m_bathy = nullptr;
     vistle::FloatParameter *m_verticalScale = nullptr;
     std::array<vistle::IntParameter *, NUM_BLOCKS> m_blocks{nullptr, nullptr};
-    std::array<vistle::StringParameter *, NUM_SCALARS> m_scalars;
+    /* std::array<vistle::StringParameter *, NUM_SCALARS> m_scalars; */
+    std::vector<vistle::StringParameter *> m_scalars;
 
     //Ports
     vistle::Port *m_seaSurface_out = nullptr;
     vistle::Port *m_groundSurface_out = nullptr;
-    std::array<vistle::Port *, NUM_SCALARS> m_scalarsOut;
+    /* std::array<vistle::Port *, NUM_SCALARS> m_scalarsOut; */
+    std::vector<vistle::Port *> m_scalarsOut;
 
     //Polygons
     vistle::Polygons::ptr ptr_sea;
 
     //Scalar
-    std::array<vistle::Vec<vistle::Scalar>::ptr, NUM_SCALARS> ptr_Scalar;
+    /* std::array<vistle::Vec<vistle::Scalar>::ptr, NUM_SCALARS> ptr_Scalar; */
+    std::vector<vistle::Vec<vistle::Scalar>::ptr> ptr_Scalar;
 
     //helper variables
     size_t verticesSea;
@@ -152,7 +160,8 @@ private:
     std::vector<float> vecEta;
 
     //lat = 0; lon = 1
-    std::array<std::string, NUM_BLOCKS> m_latLon_Surface;
+    std::array<std::string, NUM_BLOCKS> m_latLon_Sea;
     std::array<std::string, NUM_BLOCKS> m_latLon_Ground;
+
 };
 #endif
