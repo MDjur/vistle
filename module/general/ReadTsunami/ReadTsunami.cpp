@@ -30,7 +30,7 @@
 #include <vector>
 
 using namespace vistle;
-using namespace PnetCDF;
+using namespace netCDF;
 
 MODULE_MAIN_THREAD(ReadTsunami, boost::mpi::threading::multiple)
 namespace {
@@ -45,9 +45,7 @@ constexpr auto NONE{"None"};
 } // namespace
 
 ReadTsunami::ReadTsunami(const string &name, int moduleID, mpi::communicator comm)
-: vistle::Reader(name, moduleID, comm)
-, m_needSea(false)
-, m_pnetcdf_comm(comm, boost::mpi::comm_create_kind::comm_duplicate)
+: vistle::Reader(name, moduleID, comm), m_needSea(false)
 {
     // file-browser
     m_filedir = addStringParameter("file_dir", "NC File directory", "", Parameter::Filename);
@@ -165,13 +163,14 @@ bool ReadTsunami::examine(const vistle::Parameter *param)
  *
  * @return Return open ncFile as unique_ptr if there is no error, else a nullptr.
  */
-unique_ptr<NcmpiFile> ReadTsunami::openNcmpiFile()
+/* unique_ptr<NcmpiFile> ReadTsunami::openNcmpiFile() */
+unique_ptr<NcFile> ReadTsunami::openNcmpiFile()
 {
     const auto &fileName = m_filedir->getValue();
     try {
-        return make_unique<NcmpiFile>(m_pnetcdf_comm, fileName, NcFile::read);
-    } catch (PnetCDF::exceptions::NcmpiException &e) {
-        sendInfo("%s error code=%d Error!", e.what(), e.errorCode());
+        return make_unique<NcFile>(fileName, NcFile::read);
+    } catch (...) {
+        sendInfo("Couldn't open NetCDF file!");
         return nullptr;
     }
 }
@@ -411,11 +410,11 @@ void ReadTsunami::initETA(const NcFile *ncFile, const array<PNcVarExt, 2> &ncExt
     const auto &lonSea = ncExtSea[1];
     const auto &nTimesteps = time.calc_numtime();
     m_block_etaVec[block] = vector<float>(nTimesteps * verticesSea);
-    const vector<MPI_Offset> vecStartEta{time.first(), latSea.Start(), lonSea.Start()};
-    const vector<MPI_Offset> vecCountEta{nTimesteps, latSea.Count(), lonSea.Count()};
-    const vector<MPI_Offset> vecStrideEta{time.inc(), latSea.Stride(), lonSea.Stride()};
+    const vector<size_t> vecStartEta{static_cast<size_t>(time.first()), latSea.Start(), lonSea.Start()};
+    const vector<size_t> vecCountEta{static_cast<size_t>(nTimesteps), latSea.Count(), lonSea.Count()};
+    const vector<ptrdiff_t> vecStrideEta{static_cast<ptrdiff_t>(time.inc()), latSea.Stride(), lonSea.Stride()};
     auto &vecEta = m_block_etaVec[block];
-    etaVar.getVar_all(vecStartEta, vecCountEta, vecStrideEta, vecEta.data());
+    etaVar.getVar(vecStartEta, vecCountEta, vecStrideEta, vecEta.data());
 
     //filter fillvalue
     if (m_fill->getValue()) {
@@ -447,14 +446,14 @@ void ReadTsunami::initScalars(const NcFile *ncFile, const array<PNcVarExt, 2> &n
         if (scName == NONE)
             continue;
         vector<float> vecScalar(verticesSea);
-        const vector<MPI_Offset> vecScalarStart{latSea.Start(), lonSea.Start()};
-        const vector<MPI_Offset> vecScalarCount{latSea.Count(), lonSea.Count()};
-        const vector<MPI_Offset> vecScalarStride{1, 1};
-        const vector<MPI_Offset> vecScalarImap{1, latSea.Count()}; // transponse
+        const vector<size_t> vecScalarStart{latSea.Start(), lonSea.Start()};
+        const vector<size_t> vecScalarCount{latSea.Count(), lonSea.Count()};
+        const vector<ptrdiff_t> vecScalarStride{1, 1};
+        const vector<ptrdiff_t> vecScalarImap{1, static_cast<ptrdiff_t>(latSea.Count())}; // transponse
         const auto &val = ncFile->getVar(scName);
         VisVecScalarPtr scalarPtr(new Vec<Scalar>(verticesSea));
         vecScalarPtrArr[i] = scalarPtr;
-        val.getVar_all(vecScalarStart, vecScalarCount, vecScalarStride, vecScalarImap, scalarPtr->x().begin());
+        val.getVar(vecScalarStart, vecScalarCount, vecScalarStride, vecScalarImap, scalarPtr->x().begin());
 
         //set some meta data
         scalarPtr->addAttribute(_species, scName);
@@ -527,9 +526,9 @@ void ReadTsunami::createGround(Token &token, const NcFile *ncFile, const array<v
     const size_t &verticesGround = latGround.Count() * lonGround.Count();
     vector<float> vecDepth(verticesGround);
     const NcVar &bathymetryVar = ncFile->getVar(m_bathy->getValue());
-    const vector<MPI_Offset> vecStartBathy{latGround.Start(), lonGround.Start()};
-    const vector<MPI_Offset> vecCountBathy{latGround.Count(), lonGround.Count()};
-    bathymetryVar.getVar_all(vecStartBathy, vecCountBathy, vecDepth.data());
+    const vector<size_t> vecStartBathy{latGround.Start(), lonGround.Start()};
+    const vector<size_t> vecCountBathy{latGround.Count(), lonGround.Count()};
+    bathymetryVar.getVar(vecStartBathy, vecCountBathy, vecDepth.data());
     if (!vecDepth.empty()) {
         vector<float> vecLatGrid(latGround.Count()), vecLonGrid(lonGround.Count());
         latGround.readNcVar(vecLatGrid.data());
@@ -593,15 +592,6 @@ bool ReadTsunami::computeConst(Token &token, const int block)
             printRank0("File doesn't provide bathymetry data");
         else
             createGround(token, ncFile.get(), nBlocks, blockPartitionIdx, ghost, block);
-    }
-
-    /* check if there is any PnetCDF internal malloc residue */
-    MPI_Offset malloc_size, sum_size;
-    int err = ncmpi_inq_malloc_size(&malloc_size);
-    if (err == NC_NOERR) {
-        MPI_Reduce(&malloc_size, &sum_size, 1, MPI_OFFSET, MPI_SUM, 0, MPI_COMM_WORLD);
-        if (rank() == 0 && sum_size > 0)
-            sendInfo("heap memory allocated by PnetCDF internally has %lld bytes yet to be freed\n", sum_size);
     }
     return true;
 }

@@ -15,25 +15,31 @@
  ** Date:  29.10.2021 Version 2 with PnetCDF                               **
  ** Date:  24.01.2022 Version 2.1 use layergrid instead of polygons        **
  ** Date:  25.01.2022 Version 2.2 optimize creation of surfaces            **
+ ** Date:  08.02.2022 Version 3 return to netCDF because of bug in PnetCDF **
 \**************************************************************************/
 
 #ifndef _READTSUNAMI_H
 #define _READTSUNAMI_H
 
-#include "vistle/core/index.h"
 #include <atomic>
+#include <cstddef>
 #include <memory>
-#include <mpi.h>
 #include <mutex>
-#include <vistle/module/reader.h>
-#include <vistle/core/layergrid.h>
-
-#include <pnetcdf>
 #include <vector>
 #include <array>
 
+#include "vistle/core/index.h"
+#include <vistle/module/reader.h>
+#include <vistle/core/layergrid.h>
+
+#include <ncVar.h>
+#include <ncFile.h>
+#include <ncDim.h>
+
 constexpr int NUM_BLOCKS{2};
 constexpr int NUM_SCALARS{4};
+using namespace netCDF;
+using namespace std;
 
 class ReadTsunami: public vistle::Reader {
 public:
@@ -42,8 +48,6 @@ public:
     ~ReadTsunami() override;
 
 private:
-    typedef PnetCDF::NcmpiVar NcVar;
-    typedef PnetCDF::NcmpiFile NcFile;
     typedef vistle::Vec<vistle::Scalar>::ptr VisVecScalarPtr;
     typedef array<VisVecScalarPtr, NUM_SCALARS> ArrVecScalarPtrs;
     typedef vector<ArrVecScalarPtrs> VecArrVecScalarPtrs;
@@ -66,11 +70,11 @@ private:
     typedef Dim<MPI_Offset> moffDim;
     typedef Dim<size_t> sztDim;
 
-    template<class NcParamType>
+    template<class NcParamStartCount, class NcParamStrideImap>
     struct NcVarExt {
         NcVarExt() = default;
-        NcVarExt(const NcVar &nc, const NcParamType &start = 0, const NcParamType &count = 0,
-                 const NcParamType &stride = 1, const NcParamType &imap = 1)
+        NcVarExt(const NcVar &nc, const NcParamStartCount &start = 0, const NcParamStartCount &count = 0,
+                 const NcParamStrideImap &stride = 1, const NcParamStrideImap &imap = 1)
         : start(start), count(count), stride(stride), imap(imap)
         {
             ncVar = make_unique<NcVar>(nc);
@@ -84,7 +88,8 @@ private:
         template<class T>
         void readNcVar(T *storage) const
         {
-            const vector<NcParamType> v_start{start}, v_count{count}, v_stride{stride}, v_imap{imap};
+            const vector<NcParamStartCount> v_start{start}, v_count{count};
+            const vector<NcParamStrideImap> v_stride{stride}, v_imap{imap};
             read(storage, v_start, v_count, v_stride, v_imap);
         }
 
@@ -92,15 +97,15 @@ private:
         template<class T, class... Args>
         void read(T *storage, Args... args) const
         {
-            ncVar->getVar_all(args..., storage);
+            ncVar->getVar(args..., storage);
         }
         unique_ptr<NcVar> ncVar;
-        NcParamType start;
-        NcParamType count;
-        NcParamType stride;
-        NcParamType imap;
+        NcParamStartCount start;
+        NcParamStartCount count;
+        NcParamStrideImap stride;
+        NcParamStrideImap imap;
     };
-    typedef NcVarExt<MPI_Offset> PNcVarExt;
+    typedef NcVarExt<size_t, ptrdiff_t> PNcVarExt;
 
     //Vistle functions
     bool prepareRead() override;
@@ -160,7 +165,6 @@ private:
     //*****helper variables*****//
     atomic_bool m_needSea;
     mutex m_mtx;
-    boost::mpi::intercommunicator m_pnetcdf_comm;
 
     //per block
     vector<int> m_block_etaIdx;
