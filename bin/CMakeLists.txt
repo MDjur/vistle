@@ -52,7 +52,7 @@ set(VISTLE_PYINSTALLER_COMPILE
     --onefile
     --name)
 
-set(VISTLE_TUI_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/vistle_tui.py)
+set(VISTLE_TUI_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/vistle_tui_cmd.py)
 set(VISTLE_TUI_BIN ${CMAKE_CURRENT_BINARY_DIR}/vistle_tui)
 
 add_custom_target(build_vistle_tui ALL DEPENDS ${VISTLE_TUI_BIN})

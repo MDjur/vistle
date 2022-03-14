@@ -1,9 +1,39 @@
 #! /bin/sh
 
-import argparse
+from cmd import Cmd
 import vistle
 
-console_functions = [
+class Command:
+    def __init__(self, function):
+        self.function = function
+
+    def function_wrapper(self, *args, **kwargs):
+        return self.function(*args, **kwargs)
+
+    def name(self):
+        return self.function.__name__
+
+    def help(self):
+        print(self.function.__doc__)
+
+class VistleShell(Cmd):
+    prompt = '( vistle ) '
+    intro = "Welcome to VistleShell. Type ? to list commands"
+
+    def do_exit(self, inp):
+        print("Close")
+        return True
+
+    def help_exit(self):
+        print('exit the application. Shorthand: x q Ctrl-D.')
+
+    def default(self, inp):
+        if inp in ('x', 'q'):
+            return self.do_exit(inp)
+
+        print("Default: {}".format(inp))
+
+console_functions = [Command(f) for f in [
     vistle.connect,
     vistle.source,
     vistle.removeHub,
@@ -65,26 +95,12 @@ console_functions = [
     vistle.Message,
     vistle.StateObserver,
     vistle.Text,
-    vistle.Status
-]
+    vistle.Status,
+    vistle._vistle.sessionConnect
+]]
 
-parser = argparse.ArgumentParser(description="Vistle console")
-parser.add_argument("host", nargs=1, help="connection host.")
-parser.add_argument("port", nargs=1, help="connection port.", type=int)
+shell = VistleShell()
 for f in console_functions:
-    name = f.__name__
-    doc = f.__doc__
-    # tmp = [name[0]]
-    # shortcut = "".join(tmp + [c for c in name if c.isupper()])
-    # parser.add_argument("-" + shortcut,"--" + name, nargs="+", help=doc )
-    parser.add_argument("--" + name, nargs="+", metavar="name", help=doc )
-
-args = parser.parse_args()
-
-PORT = args.port[0]
-HOST = args.host[0]
-
-vistle._vistle.sessionConnect(None, HOST, PORT)
-
-# for arg in args:
-#     print(arg.__name__)
+    setattr(VistleShell, "do_" + f.name(), f.function_wrapper)
+    setattr(VistleShell, "help_" + f.name(), f.help)
+shell.cmdloop()
