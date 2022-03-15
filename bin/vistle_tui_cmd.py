@@ -8,6 +8,7 @@ class Command:
         self.function = function
 
     def function_wrapper(self, *args, **kwargs):
+        # function_types = self.__parser(*args)
         return self.function(*args, **kwargs)
 
     def name(self):
@@ -15,6 +16,10 @@ class Command:
 
     def help(self):
         print(self.function.__doc__)
+
+    def __parser(self, *args):
+        pass
+        # for arg in args:
 
 class VistleShell(Cmd):
     prompt = '( vistle ) '
@@ -33,7 +38,8 @@ class VistleShell(Cmd):
 
         print("Default: {}".format(inp))
 
-console_functions = [Command(f) for f in [
+
+command_functions = [Command(f) for f in [
     vistle.connect,
     vistle.source,
     vistle.removeHub,
@@ -99,8 +105,7 @@ console_functions = [Command(f) for f in [
     vistle._vistle.sessionConnect
 ]]
 
-shell = VistleShell()
-for f in console_functions:
+for f in command_functions:
     setattr(VistleShell, "do_" + f.name(), f.function_wrapper)
     setattr(VistleShell, "help_" + f.name(), f.help)
-shell.cmdloop()
+VistleShell().cmdloop()
