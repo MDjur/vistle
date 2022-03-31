@@ -1,5 +1,5 @@
 use_openmp()
-add_definitions(-DCUTGEOMETRY)
+add_definitions(-DCLIP)
 add_definitions(-DCUTTINGSURFACE)
 add_definitions(-DTOGGLESIGN)
 
@@ -36,4 +36,4 @@ endif()
 
 include_directories(SYSTEM ${THRUST_INCLUDE_DIR})
 
-add_module(CutGeometry "clip geometry at basic geometry like plane, cylinder or sphere" CutGeometry.cpp PlaneClip.cpp ../IsoSurface/IsoDataFunctor.cpp)
+add_module(Clip "Clip geometry at basic geometry like plane, cylinder or sphere" Clip.cpp PlaneClip.cpp ../IsoSurface/IsoDataFunctor.cpp)
