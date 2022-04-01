@@ -234,13 +234,14 @@ bool COVER::parameterAdded(const int senderId, const std::string &name, const me
     std::string plugin = moduleName;
     if (boost::algorithm::ends_with(plugin, "Old"))
         plugin = plugin.substr(0, plugin.size() - 3);
-    if (plugin == "CutGeometry")
+    if (plugin == "Clip")
         plugin = "CuttingSurface";
     if (plugin == "DisCOVERay" || plugin == "OsgRenderer")
         plugin = "RhrClient";
     if (plugin == "Color")
         plugin = "ColorBars";
-        // std::cerr << "parameterAdded: sender=" <<  senderId << ", name=" << name << ", plugin=" << plugin << std::endl;
+    std::cerr << "parameterAdded: sender=" << senderId << ", name=" << name << ", plugin=" << plugin
+              << ", moduleName=" << moduleName << std::endl;
 
 #if 0
    auto creator = creatorMap.find(senderId);
