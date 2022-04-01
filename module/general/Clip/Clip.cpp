@@ -13,6 +13,17 @@
 MODULE_MAIN(Clip)
 
 using namespace vistle;
+namespace {
+template<typename T>
+struct Cut {
+    auto operator()(Object::const_ptr object, const IsoDataFunctor &decider)
+    {
+        PlaneClip cutter(T::as(object), decider);
+        cutter.process();
+        return cutter.result();
+    }
+};
+}; // namespace
 
 Clip::Clip(const std::string &name, int moduleID, mpi::communicator comm)
 : Module(name, moduleID, comm), isocontrol(this)
@@ -38,17 +49,11 @@ Object::ptr Clip::clip(Object::const_ptr object) const
         isocontrol.newFunc(object->getTransform(), &coords->x()[0], &coords->y()[0], &coords->z()[0]);
 
     switch (object->getType()) {
-    case Object::TRIANGLES: {
-        PlaneClip cutter(Triangles::as(object), decider);
-        cutter.process();
-        return cutter.result();
-    }
+    case Object::TRIANGLES:
+        return Cut<Triangles>()(object, decider);
 
-    case Object::POLYGONS: {
-        PlaneClip cutter(Polygons::as(object), decider);
-        cutter.process();
-        return cutter.result();
-    }
+    case Object::POLYGONS:
+        return Cut<Polygons>()(object, decider);
 
     default:
         break;
