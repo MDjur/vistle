@@ -24,7 +24,6 @@
 #endif
 #endif
 
-
 #include "IsoSurface.h"
 #include "Leveller.h"
 
