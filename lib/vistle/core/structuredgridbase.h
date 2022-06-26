@@ -50,6 +50,7 @@ public:
         assert(ix < dims[0]);
         assert(iy < dims[1]);
         assert(iz < dims[2]);
+        //n[0] + H[0][i], n[1] + H[1][i], n[2] + H[2][i], dims
         return (ix * dims[1] + iy) * dims[2] + iz;
     }
     static inline Index vertexIndex(const Index i[3], const Index dims[3])
