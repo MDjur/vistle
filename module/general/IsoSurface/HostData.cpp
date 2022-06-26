@@ -3,6 +3,8 @@
 
 using namespace vistle;
 
+constexpr Scalar EPSILON(1e-10);
+
 HostData::HostData(Scalar isoValue, IsoDataFunctor isoFunc, const Scalar *x, const Scalar *y, const Scalar *z)
 : IsoDataI(isoValue, isoFunc)
 , m_vertDataContainer(m_vertData, m_vertDataIdx, m_vertDataByte)
@@ -89,7 +91,7 @@ void HostData::computeGeoOutput(const Index Cellbegin, const Index fieldSize, co
         const unsigned int edge = triTable[m_caseNums[ValidCellIndex]][idx];
         const unsigned int edgeIdx1 = edgeTable[0][edge];
         const unsigned int edgeIdx2 = edgeTable[1][edge];
-        const Scalar t = tinterp(m_isovalue, field[edgeIdx1], field[edgeIdx2]);
+        const Scalar t = interpolation_weight<Scalar>(field[edgeIdx1], field[edgeIdx2], m_isovalue);
         Index outVertIdx = m_LocationList[ValidCellIndex] + idx;
         Index interpolEdgeIdx1 = Cellbegin + edgeIdx1;
         Index interpolEdgeIdx2 = Cellbegin + edgeIdx2;
@@ -102,7 +104,7 @@ void HostData::computeGeoOutput(const Index Cellbegin, const Index fieldSize, co
     }
 }
 
-void HostData::computeStructOutput(const Index CellNr, const Index ValidCellIndex)
+void HostData::computeStructuredOutput(const Index CellNr, const Index ValidCellIndex)
 {
     auto cl = vistle::StructuredGridBase::cellVertices(CellNr, m_nvert);
     assert(cl.size() <= 8);
@@ -112,13 +114,13 @@ void HostData::computeStructOutput(const Index CellNr, const Index ValidCellInde
 
     Scalar grad[8][3];
     if (m_computeNormals) {
-        const auto &H = StructuredGridBase::HexahedronIndices;
-        auto n = vistle::StructuredGridBase::cellCoordinates(CellNr, m_nvert);
-        for (int idx = 0; idx < 8; idx++) {
+        const auto &hexahedronIndices = StructuredGridBase::HexahedronIndices;
+        auto cellCoords = vistle::StructuredGridBase::cellCoordinates(CellNr, m_nvert);
+        for (int idx = 0; idx < 8; ++idx) {
             Index x[3], xl[3], xu[3];
-            for (int c = 0; c < 3; ++c) {
-                x[c] = n[c] + H[c][idx];
-            }
+            for (int c = 0; c < 3; ++c)
+                x[c] = cellCoords[c] + hexahedronIndices[c][idx];
+
             for (int c = 0; c < 3; ++c) {
                 xl[c] = x[c] > 0 ? x[c] - 1 : x[c];
                 xu[c] = x[c] < m_nvert[c] - 1 ? x[c] + 1 : x[c];

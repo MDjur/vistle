@@ -44,7 +44,7 @@ public:
     template<size_t xT, size_t yT, size_t xE, size_t yE>
     void computeGeoOutput(const Index Cellbegin, const Index fieldSize, const Index ValidCellIndex, const Index nc,
                           const int (&triTable)[xT][yT], const int (&edgeTable)[xE][yE]);
-    void computeStructOutput(const Index CellNr, const Index ValidCellIndex);
+    void computeStructuredOutput(const Index CellNr, const Index ValidCellIndex);
     void computeUnstrPolyhedronOutput(Index Cellbegin, Index Cellend, Index ValidCellIndex);
     void copyCellInToOutAtIdx(Index ValidCellIndex, const Index CellNr);
     void prepareForOutput();
