@@ -1,29 +1,46 @@
 #ifndef GHOSTCELLGENERATOR_H
 #define GHOSTCELLGENERATOR_H
 
-#include <vistle/module/module.h>
+#include <vector>
+
+#include <vistle/core/index.h>
 #include <vistle/core/unstr.h>
+#include <vistle/core/object.h>
 #include <vistle/core/polygons.h>
 #include <vistle/core/quads.h>
+#include <vistle/core/structuredgridbase.h>
+#include <vistle/module/module.h>
 
-class GhostCellGenerator: public vistle::Module {
+/* #include "ghostcell.h" */
+namespace vistle {
+class GhostCellGenerator: public Module {
 public:
     GhostCellGenerator(const std::string &name, int moduleID, mpi::communicator comm);
     ~GhostCellGenerator();
 
-    typedef std::vector<vistle::Index> DataMapping;
+    typedef std::vector<Index> DataMapping;
 
 private:
-    bool compute(std::shared_ptr<vistle::BlockTask> task) const override;
+    struct BoundaryCell {
+        BoundaryCell(Index vertexId, Index cellId, Index faceId): vertexId(vertexId), cellId(cellId), faceId(faceId){};
+        Index vertexId; // vertex which was used to pick this cell
+        Index cellId;
+        Index faceId;
+    };
+    bool prepare() override;
+    bool reduce(int timestep) override;
+    bool compute() override;
+    void linkNeighbors(std::shared_ptr<mpi::communicator> neighbors) const;
+    void addCellsContainingVert(std::vector<BoundaryCell> &boundary, UnstructuredGrid::const_ptr ugrid, Index lastCell,
+                                Index vertexId, Index faceId);
+    void addCellsContainingFaceVert(std::vector<BoundaryCell> &boundary, UnstructuredGrid::const_ptr ugrid,
+                                    Index lastCell, Index faceId);
+    std::vector<Index> blockdomainCells(UnstructuredGrid::const_ptr ugrid);
+    BoundaryCell findFirstBoundaryCell(UnstructuredGrid::const_ptr ugrid);
 
-    vistle::Polygons::ptr createSurface(vistle::UnstructuredGrid::const_ptr m_grid_in, DataMapping &em,
-                                        bool haveElementData) const;
-    vistle::Quads::ptr createSurface(vistle::StructuredGridBase::const_ptr m_grid_in, DataMapping &em,
-                                     bool haveElementData) const;
-    void renumberVertices(vistle::Coords::const_ptr coords, vistle::Indexed::ptr poly, DataMapping &vm) const;
-    void renumberVertices(vistle::Coords::const_ptr coords, vistle::Quads::ptr quad, DataMapping &vm) const;
-    void createVertices(vistle::StructuredGridBase::const_ptr grid, vistle::Quads::ptr quad, DataMapping &vm) const;
-    //bool checkNormal(vistle::Index v1, vistle::Index v2, vistle::Index v3, vistle::Scalar x_center, vistle::Scalar y_center, vistle::Scalar z_center);
+    IntParameter *m_celltree;
+    IntParameter *m_constCellSize;
+    std::vector<std::vector<Index>> m_blockDomain;
 };
-
+} // namespace vistle
 #endif

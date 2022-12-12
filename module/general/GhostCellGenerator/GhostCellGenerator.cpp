@@ -31,40 +31,218 @@
  ** Date:  10.05.2021                                                    **
 \**************************************************************************/
 
-#include <boost/mpi.hpp>
+// std
+#include <boost/mpi/environment.hpp>
+#include <memory>
 #include <sstream>
 #include <iomanip>
+#include <vector>
 
+// vistle
 #include <vistle/core/object.h>
 #include <vistle/core/vec.h>
 #include <vistle/core/unstr.h>
+#include <vistle/core/serialize.h>
 #include <vistle/core/polygons.h>
 #include <vistle/core/structuredgrid.h>
 
+// boost
+#include <boost/mpi.hpp>
+#include <boost/mpi/communicator.hpp>
+#include <boost/mpi/collectives/all_reduce.hpp>
+#include <boost/mpi/collectives/all_gather.hpp>
+#include <boost/mpi/collectives/broadcast.hpp>
+#include <boost/smart_ptr/shared_ptr.hpp>
+#include <boost/serialization/vector.hpp>
+#include <boost/serialization/map.hpp>
+
+//header
 #include "GhostCellGenerator.h"
+#include "ghostcell.h"
+#include "vistle/core/index.h"
+#include "vistle/core/messages.h"
 
 using namespace vistle;
+namespace mpi = boost::mpi;
+namespace {
+
+Object::const_ptr isNeighbor(Object::const_ptr send, Object::const_ptr recv)
+{
+    return send;
+}
+
+unsigned numEdges(UnstructuredGrid::const_ptr ugrid, Index elem)
+{
+    auto t = ugrid->tl()[elem] & UnstructuredGrid::TYPE_MASK;
+    switch (t) {
+    case UnstructuredGrid::NONE:
+    case UnstructuredGrid::POINT:
+        return 0;
+    case UnstructuredGrid::BAR:
+        return 1;
+    case UnstructuredGrid::TRIANGLE:
+        return 3;
+    case UnstructuredGrid::QUAD:
+        return 4;
+    case UnstructuredGrid::TETRAHEDRON:
+        return 4;
+    case UnstructuredGrid::PYRAMID:
+        return 8;
+    case UnstructuredGrid::PRISM:
+        return 9;
+    case UnstructuredGrid::HEXAHEDRON:
+        return 12;
+    }
+
+    return -1;
+}
+}; // namespace
 
 GhostCellGenerator::GhostCellGenerator(const std::string &name, int moduleID, mpi::communicator comm)
 : Module(name, moduleID, comm)
 {
     createInputPort("data_in", "input grid");
     createOutputPort("data_out", "grid with added ghost/halo cells");
+    m_celltree = addIntParameter("create_celltree", "create celltree", 0, Parameter::Boolean);
+    m_constCellSize = addIntParameter("const_cellSize", "const cellSize", 1, Parameter::Boolean);
+
+    // policies
+    setReducePolicy(message::ReducePolicy::Locally);
+    setSchedulingPolicy(message::SchedulingPolicy::Gang);
 }
 
 GhostCellGenerator::~GhostCellGenerator()
 {}
 
-void checkData(UnstructuredGrid::const_ptr ugrid)
-{}
-
-bool GhostCellGenerator::compute(std::shared_ptr<BlockTask> task) const
+void GhostCellGenerator::linkNeighbors(std::shared_ptr<mpi::communicator> neighbors) const
 {
+    auto world = comm();
+    *neighbors = world.split(1); //TODO: function to identify neighbors
+}
+
+bool GhostCellGenerator::prepare()
+{
+    m_blockDomain.clear();
+
+    return true;
+}
+
+bool GhostCellGenerator::reduce(int timestep)
+{
+    std::vector<std::vector<std::vector<Index>>> neighborDomains;
+    mpi::all_gather(comm(), m_blockDomain, neighborDomains);
+    std::stringstream out;
+    for (int neighborRank = 0; neighborRank < neighborDomains.size(); ++neighborRank) {
+        if (neighborRank == rank())
+            continue;
+        auto blockdomains = neighborDomains[neighborRank];
+        for (int block = 0; block < blockdomains.size(); ++block)
+            for (auto &potentialGhost: blockdomains[block])
+                out << "Block " << block << " send from rank " << neighborRank << "\n"
+                    << " Index potential ghost: " << potentialGhost << "\n";
+    }
+    sendInfo(out.str());
+    return true;
+}
+
+GhostCellGenerator::BoundaryCell GhostCellGenerator::findFirstBoundaryCell(UnstructuredGrid::const_ptr ugrid)
+{
+    auto numElem = ugrid->getNumElements();
+    auto cellList = ugrid->el();
+    auto connectivityList = ugrid->cl();
+    for (Index cellId = 0; cellId < numElem; ++cellId) {
+        auto &nf = ugrid->getNeighborFinder();
+        auto connectivityStart = cellList[cellId];
+        auto connectivityEnd = cellList[cellId + 1];
+
+        auto type = ugrid->tl()[cellId];
+        if (type == UnstructuredGrid::BAR)
+            break;
+
+        const auto &faces = UnstructuredGrid::FaceVertices[type];
+        const auto &sizes = UnstructuredGrid::FaceSizes[type];
+
+        /* for (Index faceId = 0; faceId < sizes; ) */
+
+        // find obvious face neighbor in cell
+        while (connectivityStart < connectivityEnd) {
+            auto vertexId1 = connectivityList[connectivityStart++];
+            auto vertexId2 = connectivityList[connectivityStart++];
+            auto vertexId3 = connectivityList[connectivityStart++];
+            auto faceNeighbor = nf.getNeighborElement(cellId, vertexId1, vertexId2, vertexId3);
+            if (faceNeighbor == InvalidIndex) {
+                Index faceId = connectivityEnd - connectivityStart;
+                return BoundaryCell(cellId, vertexId1, faceId);
+            }
+        }
+    }
+    return BoundaryCell(InvalidIndex, InvalidIndex, InvalidIndex);
+}
+
+void GhostCellGenerator::addCellsContainingFaceVert(std::vector<BoundaryCell> &boundary,
+                                                    UnstructuredGrid::const_ptr ugrid, Index lastCell, Index faceId)
+{
+    auto type = ugrid->tl()[lastCell] & UnstructuredGrid::TYPE_MASK;
+    auto connectivityList = ugrid->cl();
+    auto cellList = ugrid->el();
+    const auto &connectivityStart = cellList[lastCell];
+    const auto &faces = UnstructuredGrid::FaceVertices[type];
+    const auto &sizes = UnstructuredGrid::FaceSizes[type];
+    const auto &face = faces[faceId];
+    int N = sizes[faceId];
+    for (int i = 0; i < N; ++i) {
+        Index vertexFace = face[i];
+        Index vertexId = connectivityList[connectivityStart + vertexFace];
+        addCellsContainingVert(boundary, ugrid, lastCell, vertexId, faceId);
+    }
+}
+
+void GhostCellGenerator::addCellsContainingVert(std::vector<BoundaryCell> &boundary, UnstructuredGrid::const_ptr ugrid,
+                                                Index lastCell, Index vertexId, Index faceId)
+{
+    auto &nf = ugrid->getNeighborFinder();
+    auto cells = nf.getContainingElements(vertexId);
+    for (auto &cell: cells) {
+        if (cell == lastCell)
+            continue;
+        boundary.push_back(BoundaryCell(vertexId, cell, faceId));
+        lastCell = cell;
+    }
+}
+
+std::vector<Index> GhostCellGenerator::blockdomainCells(UnstructuredGrid::const_ptr ugrid)
+{
+    std::vector<Index> domain;
+    auto numElem = ugrid->getNumElements();
+    auto cellList = ugrid->el();
+    for (Index elem = 0; elem < numElem; ++elem) {
+        auto neighbor = ugrid->getNeighborElements(elem);
+        auto numEdge = numEdges(ugrid, elem);
+        const auto numFaces = ugrid->cellNumFaces(elem);
+        const auto numCorners = cellList[elem + 1] - cellList[elem];
+        auto minNumNeighbor = numEdge + numFaces + numCorners;
+
+        if (neighbor.size() < minNumNeighbor)
+            domain.push_back(elem);
+    }
+    return domain;
+}
+
+bool GhostCellGenerator::compute()
+{
+    /*
+     * 1. gather all Block vec<obj_const_ptr> per timestep (compute)
+     * 2. send vec to MPI_RANKS (reduce)
+     * 3. go through each received vec and look for neighbors and safe rank and cellIndex (reduce)
+     * 4. send neighbor info (reduce)
+     * 5. attach ghostcells (reduce)
+     * 6. pass to outputport
+     */
     DataBase::const_ptr data;
-    Polygons::const_ptr surface;
-    surface = task->accept<Polygons>("data_in");
-    if (!surface) {
-        data = task->expect<DataBase>("data_in");
+    UnstructuredGrid::const_ptr unstr;
+    unstr = accept<UnstructuredGrid>("data_in");
+    if (!unstr) {
+        data = expect<DataBase>("data_in");
         if (!data) {
             sendError("no grid and no data received");
             return true;
@@ -73,14 +251,54 @@ bool GhostCellGenerator::compute(std::shared_ptr<BlockTask> task) const
             sendError("no grid attached to data");
             return true;
         }
-        surface = Polygons::as(data->grid());
-        if (!surface) {
+        unstr = UnstructuredGrid::as(data->grid());
+        if (!unstr) {
             sendError("no valid grid attached to data");
             return true;
         }
     }
-    Object::const_ptr surface_in = surface;
-    assert(surface_in);
+
+    //init celltree
+    if (m_celltree->getValue())
+        if (!unstr->hasCelltree())
+            unstr->getCelltree();
+
+    //init vertexownerlist
+    unstr->getNeighborElements(InvalidIndex);
+
+    if (m_blockDomain.empty())
+        m_blockDomain.resize(unstr->meta().numBlocks());
+
+    const auto &block = unstr->meta().block();
+    m_blockDomain[block] = blockdomainCells(unstr);
+
+    /* Object::const_ptr surface_in = surface; */
+    /* assert(surface_in); */
+
+    /* const auto &block = surface_in->meta().block(); */
+    /* const auto &numBlock = surface_in->meta().numBlocks(); */
+    /* const auto &procRank = rank(); */
+
+    /* int nblocks = surface_in->meta().numBlocks(); */
+    /* int threads = hardware_concurrency(); */
+    /* int in_memory = 1; */
+
+    // TODO: DomainSurface implementation here => for now needs domainsurface linked before
+    // gather surfaces from other ranks
+    /* auto v_comm = comm(); */
+    /* std::vector<Object::const_ptr> surfaces_recv(size()); */
+    /* std::vector<std::string> test_vec(size()); */
+    /* mpi::gather(v_comm, surface_in, surfaces_recv, rank()); */
+    /* std::stringstream out; */
+    /* out << "rank " << rank() << " thread: " */
+    /*     << "\n"; */
+    /* out.clear(); */
+    /* mpi::gather(v_comm, out.str(), test_vec, rank()); */
+    /* out << "rank: " << rank() << " size of vec:" << surfaces_recv.size() << "\n"; */
+    /* sendInfo(out.str()); */
+
+    /* std::shared_ptr<mpi::communicator> neighbors; */
+    /* linkNeighbors(neighbors); */
 
 #if 0
     bool haveElementData = false;
@@ -93,7 +311,6 @@ bool GhostCellGenerator::compute(std::shared_ptr<BlockTask> task) const
     /* std::vector<Polygons::const_ptr> surfaceNeighbors; */
     /* b_mpi::all_gather(comm(), surface, surfaceNeighbors); */
     /* MPI_Barrier(comm()); */
-
 
     /* const auto num_elem = surface->getNumElements(); */
     /* const auto num_corners = surface->getNumCorners(); */
@@ -288,333 +505,5 @@ bool GhostCellGenerator::compute(std::shared_ptr<BlockTask> task) const
 
     return true;
 }
-
-Quads::ptr GhostCellGenerator::createSurface(vistle::StructuredGridBase::const_ptr grid,
-                                             GhostCellGenerator::DataMapping &em, bool haveElementData) const
-{
-    /* auto sgrid = std::dynamic_pointer_cast<const StructuredGrid, const StructuredGridBase>(grid); */
-
-    /* Quads::ptr m_grid_out(new Quads(0, 0)); */
-    /* auto &pcl = m_grid_out->cl(); */
-    /* Index dims[3] = {grid->getNumDivisions(0), grid->getNumDivisions(1), grid->getNumDivisions(2)}; */
-
-    /* for (int d=0; d<3; ++d) { */
-    /*     int d1 = d==0 ? 1 : 0; */
-    /*     int d2 = d==d1+1 ? d1+2 : d1+1; */
-    /*     assert(d != d1); */
-    /*     assert(d != d2); */
-    /*     assert(d1 != d2); */
-
-    /*     Index b1 = grid->getNumGhostLayers(d1, StructuredGridBase::Bottom); */
-    /*     Index e1 = grid->getNumDivisions(d1); */
-    /*     if (grid->getNumGhostLayers(d1, StructuredGridBase::Top)+1 < e1) */
-    /*         e1 -= grid->getNumGhostLayers(d1, StructuredGridBase::Top)+1; */
-    /*     else */
-    /*         e1 = 0; */
-    /*     Index b2 = grid->getNumGhostLayers(d2, StructuredGridBase::Bottom); */
-    /*     Index e2 = grid->getNumDivisions(d2); */
-    /*     if (grid->getNumGhostLayers(d2, StructuredGridBase::Top)+1 < e2) */
-    /*         e2 -= grid->getNumGhostLayers(d2, StructuredGridBase::Top)+1; */
-    /*     else */
-    /*         e2 = 0; */
-
-    /*     if (grid->getNumGhostLayers(d, StructuredGridBase::Bottom) == 0) { */
-    /*         for (Index i1 = b1; i1 < e1; ++i1) { */
-    /*             for (Index i2 = b2; i2 < e2; ++i2) { */
-    /*                 Index idx[3]{0,0,0}; */
-    /*                 idx[d1] = i1; */
-    /*                 idx[d2] = i2; */
-    /*                 if (haveElementData) { */
-    /*                     em.emplace_back(grid->cellIndex(idx, dims)); */
-    /*                 } */
-    /*                 pcl.push_back(grid->vertexIndex(idx,dims)); */
-    /*                 idx[d1] = i1+1; */
-    /*                 pcl.push_back(grid->vertexIndex(idx,dims)); */
-    /*                 idx[d2] = i2+1; */
-    /*                 pcl.push_back(grid->vertexIndex(idx,dims)); */
-    /*                 idx[d1] = i1; */
-    /*                 pcl.push_back(grid->vertexIndex(idx,dims)); */
-    /*             } */
-    /*         } */
-    /*     } */
-    /*     if (grid->getNumDivisions(d) > 1 && grid->getNumGhostLayers(d, StructuredGridBase::Top) == 0) { */
-    /*         for (Index i1 = b1; i1 < e1; ++i1) { */
-    /*             for (Index i2 = b2; i2 < e2; ++i2) { */
-    /*                 Index idx[3]{0,0,0}; */
-    /*                 idx[d] = grid->getNumDivisions(d)-1; */
-    /*                 idx[d1] = i1; */
-    /*                 idx[d2] = i2; */
-    /*                 if (haveElementData) { */
-    /*                     --idx[d]; */
-    /*                     em.emplace_back(grid->cellIndex(idx, dims)); */
-    /*                     idx[d] = grid->getNumDivisions(d)-1; */
-    /*                 } */
-    /*                 pcl.push_back(grid->vertexIndex(idx,dims)); */
-    /*                 idx[d1] = i1+1; */
-    /*                 pcl.push_back(grid->vertexIndex(idx,dims)); */
-    /*                 idx[d2] = i2+1; */
-    /*                 pcl.push_back(grid->vertexIndex(idx,dims)); */
-    /*                 idx[d1] = i1; */
-    /*                 pcl.push_back(grid->vertexIndex(idx,dims)); */
-    /*             } */
-    /*         } */
-
-    /*     } */
-    /* } */
-
-    /* return m_grid_out; */
-    return Quads::ptr();
-}
-
-void GhostCellGenerator::renumberVertices(Coords::const_ptr coords, Indexed::ptr poly, DataMapping &vm) const
-{
-    /* const bool reuseCoord = getIntParameter("reuseCoordinates"); */
-
-    /* if (reuseCoord) { */
-    /*    poly->d()->x[0] = coords->d()->x[0]; */
-    /*    poly->d()->x[1] = coords->d()->x[1]; */
-    /*    poly->d()->x[2] = coords->d()->x[2]; */
-    /* } else { */
-    /*    vm.clear(); */
-
-    /*    std::map<Index, Index> mapped; */
-    /*    for (Index &v: poly->cl()) { */
-    /*       if (mapped.emplace(v, vm.size()).second) { */
-    /*          Index vv = vm.size(); */
-    /*          vm.push_back(v); */
-    /*          v=vv; */
-    /*       } else { */
-    /*          v=mapped[v]; */
-    /*       } */
-    /*    } */
-    /*    mapped.clear(); */
-
-    /*    const Scalar *xcoord = &coords->x()[0]; */
-    /*    const Scalar *ycoord = &coords->y()[0]; */
-    /*    const Scalar *zcoord = &coords->z()[0]; */
-    /*    auto &px = poly->x(); */
-    /*    auto &py = poly->y(); */
-    /*    auto &pz = poly->z(); */
-    /*    px.resize(vm.size()); */
-    /*    py.resize(vm.size()); */
-    /*    pz.resize(vm.size()); */
-
-    /*    for (Index i=0; i<vm.size(); ++i) { */
-    /*       px[i] = xcoord[vm[i]]; */
-    /*       py[i] = ycoord[vm[i]]; */
-    /*       pz[i] = zcoord[vm[i]]; */
-    /*    } */
-    /* } */
-}
-
-void GhostCellGenerator::renumberVertices(Coords::const_ptr coords, Quads::ptr quad, DataMapping &vm) const
-{
-    /* const bool reuseCoord = getIntParameter("reuseCoordinates"); */
-
-    /* if (reuseCoord) { */
-    /*    quad->d()->x[0] = coords->d()->x[0]; */
-    /*    quad->d()->x[1] = coords->d()->x[1]; */
-    /*    quad->d()->x[2] = coords->d()->x[2]; */
-    /* } else { */
-    /*    vm.clear(); */
-
-    /*    std::map<Index, Index> mapped; */
-    /*    for (Index &v: quad->cl()) { */
-    /*       if (mapped.emplace(v,vm.size()).second) { */
-    /*          Index vv=vm.size(); */
-    /*          vm.push_back(v); */
-    /*          v = vv; */
-    /*       } else { */
-    /*          v=mapped[v]; */
-    /*       } */
-    /*    } */
-    /*    mapped.clear(); */
-
-    /*    const Scalar *xcoord = &coords->x()[0]; */
-    /*    const Scalar *ycoord = &coords->y()[0]; */
-    /*    const Scalar *zcoord = &coords->z()[0]; */
-    /*    auto &px = quad->x(); */
-    /*    auto &py = quad->y(); */
-    /*    auto &pz = quad->z(); */
-    /*    px.resize(vm.size()); */
-    /*    py.resize(vm.size()); */
-    /*    pz.resize(vm.size()); */
-
-    /*    for (Index i=0; i<vm.size(); ++i) { */
-    /*       px[i] = xcoord[vm[i]]; */
-    /*       py[i] = ycoord[vm[i]]; */
-    /*       pz[i] = zcoord[vm[i]]; */
-    /*    } */
-    /* } */
-}
-
-void GhostCellGenerator::createVertices(StructuredGridBase::const_ptr grid, Quads::ptr quad, DataMapping &vm) const
-{
-    /* vm.clear(); */
-    /* std::map<Index, Index> mapped; */
-    /* for (Index &v: quad->cl()) { */
-    /*     if (mapped.emplace(v,vm.size()).second) { */
-    /*         Index vv=vm.size(); */
-    /*         vm.push_back(v); */
-    /*         v = vv; */
-    /*     } else { */
-    /*         v=mapped[v]; */
-    /*     } */
-    /* } */
-    /* mapped.clear(); */
-
-    /* auto &px = quad->x(); */
-    /* auto &py = quad->y(); */
-    /* auto &pz = quad->z(); */
-    /* px.resize(vm.size()); */
-    /* py.resize(vm.size()); */
-    /* pz.resize(vm.size()); */
-
-    /* for (Index i=0; i<vm.size(); ++i) { */
-    /*     Vector3 p = grid->getVertex(vm[i]); */
-    /*     px[i] = p[0]; */
-    /*     py[i] = p[1]; */
-    /*     pz[i] = p[2]; */
-    /* } */
-}
-
-Polygons::ptr GhostCellGenerator::createSurface(vistle::UnstructuredGrid::const_ptr m_grid_in,
-                                                GhostCellGenerator::DataMapping &em, bool haveElementData) const
-{
-    /* const bool showgho = getIntParameter("ghost"); */
-    /* const bool showtet = getIntParameter("tetrahedron"); */
-    /* const bool showpyr = getIntParameter("pyramid"); */
-    /* const bool showpri = getIntParameter("prism"); */
-    /* const bool showhex = getIntParameter("hexahedron"); */
-    /* const bool showpol = getIntParameter("polyhedron"); */
-    /* const bool showtri = getIntParameter("triangle"); */
-    /* const bool showqua = getIntParameter("quad"); */
-
-    /* const Index num_elem = m_grid_in->getNumElements(); */
-    /* const Index *el = &m_grid_in->el()[0]; */
-    /* const Index *cl = &m_grid_in->cl()[0]; */
-    /* const Byte *tl = &m_grid_in->tl()[0]; */
-    /* UnstructuredGrid::VertexOwnerList::const_ptr vol=m_grid_in->getVertexOwnerList(); */
-
-    /* Polygons::ptr m_grid_out(new Polygons(0, 0, 0)); */
-    /* auto &pl = m_grid_out->el(); */
-    /* auto &pcl = m_grid_out->cl(); */
-
-    /* auto nf = m_grid_in->getNeighborFinder(); */
-    /* for (Index i=0; i<num_elem; ++i) { */
-    /*    const Index elStart = el[i], elEnd = el[i+1]; */
-    /*    bool ghost = tl[i] & UnstructuredGrid::GHOST_BIT; */
-    /*    if (!showgho && ghost) */
-    /*        continue; */
-    /*    Byte t = tl[i] & UnstructuredGrid::TYPE_MASK; */
-    /*    if (t == UnstructuredGrid::POLYHEDRON) { */
-    /*        if (showpol) { */
-    /*            Index facestart = InvalidIndex; */
-    /*            Index term = 0; */
-    /*            for (Index j=elStart; j<elEnd; ++j) { */
-    /*                if (facestart == InvalidIndex) { */
-    /*                    facestart = j; */
-    /*                    term = cl[j]; */
-    /*                } else if (cl[j] == term) { */
-    /*                    Index numVert = j - facestart; */
-    /*                    if (numVert >= 3) { */
-    /*                        auto face = &cl[facestart]; */
-    /*                        Index neighbour = nf.getNeighborElement(i, face[0], face[1], face[2]); */
-    /*                        if (neighbour == InvalidIndex) { */
-    /*                            const Index *begin = &face[0], *end=&face[numVert]; */
-    /*                            auto rbegin = std::reverse_iterator<const Index *>(end), rend = std::reverse_iterator<const Index *>(begin); */
-    /*                            std::copy(rbegin, rend, std::back_inserter(pcl)); */
-    /*                            if (haveElementData) */
-    /*                                em.emplace_back(i); */
-    /*                            pl.push_back(pcl.size()); */
-    /*                        } */
-    /*                    } */
-    /*                    facestart = InvalidIndex; */
-    /*                } */
-    /*            } */
-    /*        } */
-    /*    } else { */
-    /*        bool show = false; */
-    /*        switch(t) { */
-    /*        case UnstructuredGrid::PYRAMID: */
-    /*            show = showpyr; */
-    /*            break; */
-    /*        case UnstructuredGrid::PRISM: */
-    /*            show = showpri; */
-    /*            break; */
-    /*        case UnstructuredGrid::TETRAHEDRON: */
-    /*            show = showtet; */
-    /*            break; */
-    /*        case UnstructuredGrid::HEXAHEDRON: */
-    /*            show = showhex; */
-    /*            break; */
-    /*        case UnstructuredGrid::TRIANGLE: */
-    /*            show = showtri; */
-    /*            break; */
-    /*        case UnstructuredGrid::QUAD: */
-    /*            show = showqua; */
-    /*            break; */
-    /*        default: */
-    /*            break; */
-    /*        } */
-
-    /*        if (show) { */
-    /*          const auto numFaces = UnstructuredGrid::NumFaces[t]; */
-    /*          const auto &faces = UnstructuredGrid::FaceVertices[t]; */
-    /*          for (int f=0; f<numFaces; ++f) { */
-    /*             const auto &face = faces[f]; */
-    /*             Index neighbour = 0; */
-    /*             if (UnstructuredGrid::Dimensionality[t] == 3) */
-    /*                 neighbour = nf.getNeighborElement(i, cl[elStart + face[0]], cl[elStart + face[1]], cl[elStart + face[2]]); */
-    /*             if (UnstructuredGrid::Dimensionality[t] == 2 || neighbour == InvalidIndex) { */
-    /*                const auto facesize = UnstructuredGrid::FaceSizes[t][f]; */
-    /*                for (unsigned j=0;j<facesize;++j) { */
-    /*                   pcl.push_back(cl[elStart + face[j]]); */
-    /*                } */
-    /*                if (haveElementData) */
-    /*                    em.emplace_back(i); */
-    /*                pl.push_back(pcl.size()); */
-    /*             } */
-    /*          } */
-    /*       } */
-    /*    } */
-    /* } */
-
-    /* if (m_grid_out->getNumElements() == 0) { */
-    /*    return Polygons::ptr(); */
-    /* } */
-
-    /* return m_grid_out; */
-    return Polygons::ptr();
-}
-
-//bool GhostCellGenerator::checkNormal(Index v1, Index v2, Index v3, Scalar x_center, Scalar y_center, Scalar z_center) {
-//   Scalar *xcoord = m_grid_in->x().data();
-//   Scalar *ycoord = m_grid_in->y().data();
-//   Scalar *zcoord = m_grid_in->z().data();
-//   Scalar a[3], b[3], c[3], n[3];
-
-//   // compute normal of a=v2v1 and b=v2v3
-//   a[0] = xcoord[v1] - xcoord[v2];
-//   a[1] = ycoord[v1] - ycoord[v2];
-//   a[2] = zcoord[v1] - zcoord[v2];
-//   b[0] = xcoord[v3] - xcoord[v2];
-//   b[1] = ycoord[v3] - ycoord[v2];
-//   b[2] = zcoord[v3] - zcoord[v2];
-//   n[0] = a[1] * b[2] - b[1] * a[2];
-//   n[1] = a[2] * b[0] - b[2] * a[0];
-//   n[2] = a[0] * b[1] - b[0] * a[1];
-
-//   // compute vector from base-point to volume-center
-//   c[0] = x_center - xcoord[v2];
-//   c[1] = y_center - ycoord[v2];
-//   c[2] = z_center - zcoord[v2];
-//   // look if normal is correct or not
-//   if ((c[0] * n[0] + c[1] * n[1] + c[2] * n[2]) > 0)
-//       return false;
-//   else
-//       return true;
-//}
-
 
 MODULE_MAIN(GhostCellGenerator)
