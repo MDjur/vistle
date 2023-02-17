@@ -35,12 +35,12 @@ private:
                                 Index vertexId, Index faceId);
     void addCellsContainingFaceVert(std::vector<BoundaryCell> &boundary, UnstructuredGrid::const_ptr ugrid,
                                     Index lastCell, Index faceId);
-    std::vector<Index> blockdomainCells(UnstructuredGrid::const_ptr ugrid);
+    DataMapping blockdomainCells(UnstructuredGrid::const_ptr ugrid);
     BoundaryCell findFirstBoundaryCell(UnstructuredGrid::const_ptr ugrid);
 
     IntParameter *m_celltree;
     IntParameter *m_constCellSize;
-    std::vector<std::vector<Index>> m_blockDomain;
+    std::vector<DataMapping> m_blockDomain;
 };
 } // namespace vistle
 #endif
