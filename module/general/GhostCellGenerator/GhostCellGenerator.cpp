@@ -66,6 +66,8 @@ using namespace vistle;
 namespace mpi = boost::mpi;
 namespace {
 
+typedef GhostCellGenerator::DataMapping DataMapping;
+
 Object::const_ptr isNeighbor(Object::const_ptr send, Object::const_ptr recv)
 {
     return send;
@@ -131,17 +133,15 @@ bool GhostCellGenerator::reduce(int timestep)
 {
     std::vector<std::vector<std::vector<Index>>> neighborDomains;
     mpi::all_gather(comm(), m_blockDomain, neighborDomains);
-    std::stringstream out;
     for (int neighborRank = 0; neighborRank < neighborDomains.size(); ++neighborRank) {
         if (neighborRank == rank())
             continue;
         auto blockdomains = neighborDomains[neighborRank];
         for (int block = 0; block < blockdomains.size(); ++block)
-            for (auto &potentialGhost: blockdomains[block])
-                out << "Block " << block << " send from rank " << neighborRank << "\n"
-                    << " Index potential ghost: " << potentialGhost << "\n";
+            for (auto &potentialGhost: blockdomains[block]) {
+                sendInfo("Block %d send from rank %d Index potential ghost: %d", block, neighborRank, potentialGhost);
+            }
     }
-    sendInfo(out.str());
     return true;
 }
 
@@ -159,8 +159,8 @@ GhostCellGenerator::BoundaryCell GhostCellGenerator::findFirstBoundaryCell(Unstr
         if (type == UnstructuredGrid::BAR)
             break;
 
-        const auto &faces = UnstructuredGrid::FaceVertices[type];
-        const auto &sizes = UnstructuredGrid::FaceSizes[type];
+        // const auto &faces = UnstructuredGrid::FaceVertices[type];
+        // const auto &sizes = UnstructuredGrid::FaceSizes[type];
 
         /* for (Index faceId = 0; faceId < sizes; ) */
 
@@ -210,7 +210,7 @@ void GhostCellGenerator::addCellsContainingVert(std::vector<BoundaryCell> &bound
     }
 }
 
-std::vector<Index> GhostCellGenerator::blockdomainCells(UnstructuredGrid::const_ptr ugrid)
+DataMapping GhostCellGenerator::blockdomainCells(UnstructuredGrid::const_ptr ugrid)
 {
     std::vector<Index> domain;
     auto numElem = ugrid->getNumElements();
@@ -239,8 +239,7 @@ bool GhostCellGenerator::compute()
      * 6. pass to outputport
      */
     DataBase::const_ptr data;
-    UnstructuredGrid::const_ptr unstr;
-    unstr = accept<UnstructuredGrid>("data_in");
+    UnstructuredGrid::const_ptr unstr = accept<UnstructuredGrid>("data_in");
     if (!unstr) {
         data = expect<DataBase>("data_in");
         if (!data) {
