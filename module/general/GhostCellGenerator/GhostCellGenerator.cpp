@@ -58,7 +58,6 @@
 
 //header
 #include "GhostCellGenerator.h"
-#include "ghostcell.h"
 #include "vistle/core/index.h"
 #include "vistle/core/messages.h"
 
@@ -105,7 +104,7 @@ GhostCellGenerator::GhostCellGenerator(const std::string &name, int moduleID, mp
 {
     createInputPort("data_in", "input grid");
     createOutputPort("data_out", "grid with added ghost/halo cells");
-    m_celltree = addIntParameter("create_celltree", "create celltree", 0, Parameter::Boolean);
+    m_celltree = addIntParameter("create_celltree", "create celltree", 1, Parameter::Boolean);
     m_constCellSize = addIntParameter("const_cellSize", "const cellSize", 1, Parameter::Boolean);
 
     // policies
