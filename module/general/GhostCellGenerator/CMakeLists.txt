@@ -5,11 +5,6 @@ elseif(${CMAKE_CXX_COMPILER_ID} MATCHES "Clang")
 endif()
 
 set(HEADERS GhostCellGenerator.h ghostcell.h)
-set(SOURCES GhostCellGenerator.cpp)
+set(SOURCES GhostCellGenerator.cpp ghostcell.cpp)
 
 add_module(GhostCellGenerator "Generate Ghost Cells for UnstructuredGrids" ${SOURCES} ${HEADERS})
-
-# target_include_directories(GhostCellGenerator PRIVATE ${DIY_INCLUDE_PATH})
-
-#diy
-# target_include_directories(vistle_module PUBLIC $<BUILD_INTERFACE:${DIY_INCLUDE_DIR}>)

@@ -18,8 +18,8 @@ class GhostCell {
     friend class boost::serialization::access;
 
 public:
-    GhostCell(vistle::Index el, vistle::Index timestep, int rank): m_el(el){};
-    ~GhostCell();
+    GhostCell(vistle::Index el, int timestep, std::vector<vistle::Scalar> x, std::vector<vistle::Scalar> y,
+              std::vector<vistle::Scalar> z, std::vector<vistle::Index> connectivityList);
 
     vistle::Index el_id() const { return m_el; };
     std::vector<vistle::Scalar> X() { return m_x; };
@@ -38,6 +38,8 @@ public:
     }
 
 private:
+    int m_timestep;
+
     // index of cell of current ghostcell
     vistle::Index m_el;
 
@@ -53,11 +55,12 @@ class GhostZones {
     friend class GhostCell;
 
     GhostZones(): m_block(vistle::InvalidIndex) {}
-    GhostZones(vistle::Index block, const std::vector<Index> &domainCells): m_block(block) {}
+    GhostZones(vistle::Index block, int rank, int layer, const std::vector<Index> &domainCells,
+               UnstructuredGrid::const_ptr ugrid);
 
     int rank() { return m_rank; };
     int numLayer() { return m_numLayer; };
-    std::vector<GhostCell> ghostzone() { return m_ghostcells; };
+    std::vector<GhostCell> &ghostzone() { return m_ghostcells; };
 
     template<class Archive>
     void serialize(Archive &ar, const unsigned int version)
