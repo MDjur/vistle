@@ -87,7 +87,7 @@ if [ -f .release ]; then
 elif [ -f .debug ]; then
     builddir="${builddir}-debug"
     if [ "${ARCHSUFFIX%opt}" != "${ARCHSUFFIX}" ]; then
-        : ARCHSUFFIX="${ARCHSUFFIX%opt}"
+        ARCHSUFFIX="${ARCHSUFFIX%opt}"
     fi
 fi
 if [ -n "${ARCHSUFFIX}" ]; then
