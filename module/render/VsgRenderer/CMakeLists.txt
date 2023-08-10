@@ -3,7 +3,7 @@ vistle_find_package(vsgXchange)
 
 add_module(VsgRenderer "VulkanSceneGraph remote renderer" VSGRenderer.cpp VSGRenderer.h)
 
-include_directories(../COVER)
+# include_directories(../COVER)
 
 target_link_libraries(VsgRenderer vsg::vsg vistle_module vistle_renderer vistle_rhr)
 

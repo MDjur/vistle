@@ -1,11 +1,20 @@
 #include "VSGRenderer.h"
+#include "vistle/core/message.h"
+#include "vistle/core/messages.h"
 
+//std
+#include <iostream>
 #include <memory>
 #include <vector>
-#include <vsg/app/Trackball.h>
-#include <vsg/app/Viewer.h>
-#include <vsg/app/WindowTraits.h>
-#include <vsg/io/FileSystem.h>
+#include <vulkan/vulkan_core.h>
+
+//vsg
+/* #include <vsg/core/Object.h> */
+/* #include <vsg/app/Trackball.h> */
+/* #include <vsg/app/Viewer.h> */
+/* #include <vsg/app/WindowTraits.h> */
+/* #include <vsg/io/FileSystem.h> */
+
 #ifdef vsgXchange_FOUND
 
 #include <vsgXchange/all.h>
@@ -14,17 +23,31 @@
 
 #define CERR std::cerr << "VsgRenderer: "
 
-//#define USE_FBO
-//const int MaxAsyncFrames = 2;
-//static_assert(MaxAsyncFrames > 0, "MaxAsyncFrames needs to be positive");
-
 namespace {
-vsg::ref_ptr<vsg::Camera> createCameraForScene(vsg::Node *scenegraph, int32_t x, int32_t y, uint32_t width,
-                                               uint32_t height)
+
+void printVSGMetaData(vsg::ref_ptr<vsg::Object> obj)
+{
+    CERR << "Show Metadata";
+
+    if (auto auxiliary = obj->getAuxiliary()) {
+        for (auto &[key, object]: auxiliary->userObjects) {
+            if (auto s = dynamic_cast<vsg::stringValue *>(object.get()))
+                CERR << "metadata key = " << key << ", stringValue = " << s->value() << std::endl;
+            else if (auto d = dynamic_cast<vsg::doubleValue *>(object.get()))
+                CERR << "metadata key = " << key << ", doubleValue = " << d->value() << std::endl;
+            else
+                CERR << "metadata key = " << key << ", object = " << object << std::endl;
+        }
+    } else {
+        CERR << "No vsg::Auxiliary assigned to Object." << std::endl;
+    }
+}
+
+vsg::ref_ptr<vsg::Camera> createCameraForScene(vsg::Node *scene, int32_t x, int32_t y, uint32_t width, uint32_t height)
 {
     // compute the bounds of the scene graph to help position camera
     vsg::ComputeBounds computeBounds;
-    scenegraph->accept(computeBounds);
+    scene->accept(computeBounds);
     vsg::dvec3 centre = (computeBounds.bounds.min + computeBounds.bounds.max) * 0.5;
     double radius = vsg::length(computeBounds.bounds.max - computeBounds.bounds.min) * 0.6;
     double nearFarRatio = 0.001;
@@ -39,6 +62,7 @@ vsg::ref_ptr<vsg::Camera> createCameraForScene(vsg::Node *scenegraph, int32_t x,
 
     return vsg::Camera::create(perspective, lookAt, viewportstate);
 }
+
 } // namespace
 
 VSGRenderer::VSGRenderer(const std::string &name, int moduleID, mpi::communicator comm)
@@ -53,10 +77,16 @@ VSGRenderer::VSGRenderer(const std::string &name, int moduleID, mpi::communicato
     options->add(vsgXchange::all::create());
 #endif
 
-    m_scenegraph = vsg::Node::create();
+    m_scenegraph = vsg::Group::create();
+    m_scenegraph->addChild(
+        vsg::read_cast<vsg::Node>(vsg::Path("/home/hpcmdjur/git/vsgExamples/data/models/teapot.vsgt")));
+    printVSGMetaData(m_scenegraph);
     m_viewer = vsg::Viewer::create();
     auto windowTraits = vsg::WindowTraits::create();
     windowTraits->windowTitle = "VsgRenderer";
+    //Vsync
+    windowTraits->swapchainPreferences.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+
     auto window = vsg::Window::create(windowTraits);
     m_viewer->addWindow(window);
 
@@ -84,17 +114,17 @@ VSGRenderer::VSGRenderer(const std::string &name, int moduleID, mpi::communicato
 VSGRenderer::~VSGRenderer()
 {
     CERR << "destroying" << std::endl;
-    prepareQuit();
+    /* prepareQuit(); */
 }
 
-void VSGRenderer::flush()
-{
-    CERR << "flushing outstanding frames..." << std::endl;
-    for (size_t f = m_asyncFrames; f > 0; --f) {
-        composite(f - 1);
-    }
-    assert(m_numFramesToComposite == 0);
-}
+/* void VSGRenderer::flush() */
+/* { */
+/*     CERR << "flushing outstanding frames..." << std::endl; */
+/*     for (size_t f = m_asyncFrames; f > 0; --f) { */
+/*         composite(f - 1); */
+/*     } */
+/*     assert(m_numFramesToComposite == 0); */
+/* } */
 
 void VSGRenderer::prepareQuit()
 {
@@ -102,6 +132,7 @@ void VSGRenderer::prepareQuit()
     Renderer::prepareQuit();
     m_viewer->stopThreading();
     m_viewer->close();
+    /* sendMessage(vistle::message::Quit()); */
 }
 
 bool VSGRenderer::composite(size_t maxQueued)
@@ -111,12 +142,16 @@ bool VSGRenderer::composite(size_t maxQueued)
 
 bool VSGRenderer::render()
 {
+    if (!m_viewer->active()) {
+        prepareQuit();
+        return false;
+    }
     if (!m_viewer->advanceToNextFrame())
         return false;
 
     m_viewer->handleEvents();
-    m_viewer->update();
     m_viewer->recordAndSubmit();
+    m_viewer->update();
     m_viewer->present();
 
     return true;
@@ -131,38 +166,37 @@ std::shared_ptr<vistle::RenderObject> VSGRenderer::addObject(int senderId, const
     return std::make_shared<vistle::RenderObject>(senderId, senderPort, container, geometry, normals, texture);
 }
 
-/* void OSGRenderer::removeObject(std::shared_ptr<vistle::RenderObject> ro) */
-/* { */
-/*     auto oro = std::static_pointer_cast<OsgRenderObject>(ro); */
-/*     timesteps->removeObject(oro->node, oro->timestep); */
-/*     m_renderManager.removeObject(ro); */
-/* } */
+void VSGRenderer::removeObject(std::shared_ptr<vistle::RenderObject> ro)
+{
+    /* auto oro = std::static_pointer_cast<OsgRenderObject>(ro); */
+    /* timesteps->removeObject(oro->node, oro->timestep); */
+    m_renderManager.removeObject(ro);
+}
 
-/* void OSGRenderer::connectionAdded(const vistle::Port *from, const vistle::Port *to) */
-/* { */
-/*     CERR << "new connection from " << *from << " to " << *to << std::endl; */
-/*     Renderer::connectionAdded(from, to); */
-/*     if (from == m_renderManager.outputPort()) { */
-/*         m_renderManager.connectionAdded(to); */
-/*     } */
-/* } */
+void VSGRenderer::connectionAdded(const vistle::Port *from, const vistle::Port *to)
+{
+    CERR << "new connection from " << *from << " to " << *to << std::endl;
+    Renderer::connectionAdded(from, to);
+    if (from == m_renderManager.outputPort()) {
+        m_renderManager.connectionAdded(to);
+    }
+}
 
-/* void OSGRenderer::connectionRemoved(const vistle::Port *from, const vistle::Port *to) */
-/* { */
-/*     if (from == m_renderManager.outputPort()) { */
-/*         m_renderManager.connectionRemoved(to); */
-/*     } */
-/*     Renderer::connectionRemoved(from, to); */
-/* } */
+void VSGRenderer::connectionRemoved(const vistle::Port *from, const vistle::Port *to)
+{
+    if (from == m_renderManager.outputPort()) {
+        m_renderManager.connectionRemoved(to);
+    }
+    Renderer::connectionRemoved(from, to);
+}
 
-/* bool OSGRenderer::handleMessage(const vistle::message::Message *message, const vistle::MessagePayload &payload) */
-/* { */
-/*     if (m_renderManager.handleMessage(message, payload)) { */
-/*         return true; */
-/*     } */
+bool VSGRenderer::handleMessage(const vistle::message::Message *message, const vistle::MessagePayload &payload)
+{
+    if (m_renderManager.handleMessage(message, payload))
+        return true;
 
-/*     return Renderer::handleMessage(message, payload); */
-/* } */
+    return Renderer::handleMessage(message, payload);
+}
 
 
 MODULE_MAIN(VSGRenderer)

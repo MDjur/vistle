@@ -1,3 +1,6 @@
+//TODO:
+//[] in the end look at vsgHeadless example
+
 #ifndef VSGRENDERER_H
 #define VSGRENDERER_H
 
@@ -6,6 +9,7 @@
 
 #include <vsg/all.h>
 #include <vsg/core/ref_ptr.h>
+#include <vsg/nodes/Geometry.h>
 
 class VSGRenderer: public vistle::Renderer {
 public:
@@ -18,18 +22,21 @@ private:
                                                     vistle::Object::const_ptr geometry,
                                                     vistle::Object::const_ptr normals,
                                                     vistle::Object::const_ptr texture) override;
-    /* void removeObject(std::shared_ptr<vistle::RenderObject> ro) override; */
+    bool handleMessage(const vistle::message::Message *message, const vistle::MessagePayload &payload) override;
+    void removeObject(std::shared_ptr<vistle::RenderObject> ro) override;
     /* bool changeParameter(const vistle::Parameter *p) override; */
 
     bool render() override;
     void prepareQuit() override;
     bool composite(size_t maxQueued);
-    void flush();
+    /* void flush(); */
 
     vistle::ParallelRemoteRenderManager m_renderManager;
     int m_asyncFrames;
     vsg::ref_ptr<vsg::Viewer> m_viewer;
-    vsg::ref_ptr<vsg::Node> m_scenegraph;
+    vsg::ref_ptr<vsg::Group> m_scenegraph;
+    void connectionAdded(const vistle::Port *from, const vistle::Port *to) override;
+    void connectionRemoved(const vistle::Port *from, const vistle::Port *to) override;
 };
 
 #endif
