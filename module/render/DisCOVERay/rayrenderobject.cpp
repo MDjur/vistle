@@ -61,6 +61,7 @@ RayRenderObject::RayRenderObject(RTCDevice device, int senderId, const std::stri
         if (this->mapdata->guessMapping(geometry) == DataBase::Element)
             data->perPrimitiveMapping = 1;
     }
+    // check if mapped data is texture
     if (auto t = Texture1D::as(this->mapdata)) {
         data->texCoords = &t->coords()[0];
 
@@ -74,12 +75,12 @@ RayRenderObject::RayRenderObject(RTCDevice device, int senderId, const std::stri
         data->cmap->blendWithMaterial = 0;
 
         std::cerr << "texcoords from texture" << std::endl;
-    } else if (auto s = Vec<Scalar, 1>::as(this->mapdata)) {
+    } else if (auto s = Vec<Scalar, 1>::as(this->mapdata)) { // check for scalar data 1D (Velocity in x)
         data->texCoords = &s->x()[0];
 
         std::cerr << "texcoords from scalar field" << std::endl;
 
-    } else if (auto vec = Vec<Scalar, 3>::as(this->mapdata)) {
+    } else if (auto vec = Vec<Scalar, 3>::as(this->mapdata)) { // check for scalar data 3D (Velocity)
         tcoord.resize(vec->getSize());
         data->texCoords = tcoord.data();
         const Scalar *x = &vec->x()[0];
@@ -91,7 +92,7 @@ RayRenderObject::RayRenderObject(RTCDevice device, int senderId, const std::stri
             ++y;
             ++z;
         }
-    } else if (auto iscal = Vec<Index>::as(this->mapdata)) {
+    } else if (auto iscal = Vec<Index>::as(this->mapdata)) { // check if mapped data is only integer type (partition)
         tcoord.resize(iscal->getSize());
         data->texCoords = tcoord.data();
         vistle::Scalar *d = tcoord.data();
@@ -100,16 +101,20 @@ RayRenderObject::RayRenderObject(RTCDevice device, int senderId, const std::stri
         }
     }
 
+    // a little bit late?
     if (!geometry || geometry->isEmpty()) {
         return;
     }
 
+    // create scene
     data->scene = rtcNewScene(data->device);
     rtcSetSceneFlags(data->scene, RTC_SCENE_FLAG_NONE);
     rtcSetSceneBuildQuality(data->scene, RTC_BUILD_QUALITY_MEDIUM);
 
+    // create ispc geometry from vistle geometry
     RTCGeometry geom = 0;
     bool useNormals = true;
+    // Quad geo to ispc quad
     if (auto quads = Quads::as(geometry)) {
         Index numElem = quads->getNumElements();
         geom = rtcNewGeometry(data->device, RTC_GEOMETRY_TYPE_QUAD);
@@ -150,7 +155,7 @@ RayRenderObject::RayRenderObject(RTCDevice device, int senderId, const std::stri
             }
         }
 
-    } else if (auto tri = Triangles::as(geometry)) {
+    } else if (auto tri = Triangles::as(geometry)) { // triangle geo to ispc quad
         Index numElem = tri->getNumElements();
         geom = rtcNewGeometry(data->device, RTC_GEOMETRY_TYPE_TRIANGLE);
         rtcSetGeometryBuildQuality(geom, RTC_BUILD_QUALITY_MEDIUM);
@@ -188,7 +193,7 @@ RayRenderObject::RayRenderObject(RTCDevice device, int senderId, const std::stri
             }
         }
 
-    } else if (auto poly = Polygons::as(geometry)) {
+    } else if (auto poly = Polygons::as(geometry)) { // Poly to ispc quad
         Index ntri = poly->getNumCorners() - 2 * poly->getNumElements();
         assert(ntri >= 0);
 
@@ -234,7 +239,7 @@ RayRenderObject::RayRenderObject(RTCDevice device, int senderId, const std::stri
         }
         assert(t == ntri);
 
-    } else if (auto sph = Spheres::as(geometry)) {
+    } else if (auto sph = Spheres::as(geometry)) { // sphere to ispc sphere
         useNormals = false;
 
         Index nsph = sph->getNumSpheres();
@@ -252,7 +257,7 @@ RayRenderObject::RayRenderObject(RTCDevice device, int senderId, const std::stri
             s[i].r = r[i];
         }
         geom = newSpheres(data.get(), nsph);
-    } else if (auto point = Points::as(geometry)) {
+    } else if (auto point = Points::as(geometry)) { // points to ispc points
         Index np = point->getNumPoints();
         //std::cerr << "Points: #sph: " << np << std::endl;
         data->spheres = new ispc::Sphere[np];
@@ -268,7 +273,7 @@ RayRenderObject::RayRenderObject(RTCDevice device, int senderId, const std::stri
         }
         data->lighted = 0;
         geom = newSpheres(data.get(), np);
-    } else if (auto line = Lines::as(geometry)) {
+    } else if (auto line = Lines::as(geometry)) { // lines to ispc tubes
         Index nStrips = line->getNumElements();
         Index nPoints = line->getNumCorners();
         std::cerr << "Lines: #strips: " << nStrips << ", #corners: " << nPoints << std::endl;
@@ -303,7 +308,7 @@ RayRenderObject::RayRenderObject(RTCDevice device, int senderId, const std::stri
         assert(idx == nPoints);
         data->lighted = 0;
         geom = newTubes(data.get(), nPoints - 1);
-    } else if (auto tube = Tubes::as(geometry)) {
+    } else if (auto tube = Tubes::as(geometry)) { //tubes to ispc tubes
         useNormals = false;
 
         Index nStrips = tube->getNumTubes();
