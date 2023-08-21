@@ -1,5 +1,7 @@
 //TODO:
 //[] in the end look at vsgHeadless example
+//[] load other filetypes with vsgxchange
+//[] add serialization for vistle objects (example animal in vsg tutorial) to save vistle objects (scenes as vsg natives)
 
 #ifndef VSGRENDERER_H
 #define VSGRENDERER_H

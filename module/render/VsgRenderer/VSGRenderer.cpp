@@ -84,8 +84,11 @@ VSGRenderer::VSGRenderer(const std::string &name, int moduleID, mpi::communicato
     m_viewer = vsg::Viewer::create();
     auto windowTraits = vsg::WindowTraits::create();
     windowTraits->windowTitle = "VsgRenderer";
-    //Vsync
-    windowTraits->swapchainPreferences.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+
+    //Vsync => VULKAN presentation mode (Immediate, FIFO, FIFO_Relaxed, Mailbox)
+    windowTraits->swapchainPreferences.presentMode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
+    // number of images rendered parallel
+    windowTraits->swapchainPreferences.imageCount = 3;
 
     auto window = vsg::Window::create(windowTraits);
     m_viewer->addWindow(window);
@@ -94,7 +97,8 @@ VSGRenderer::VSGRenderer(const std::string &name, int moduleID, mpi::communicato
     auto camera = createCameraForScene(m_scenegraph, 0, 0, window->extent2D().width, window->extent2D().height);
     auto main_view = vsg::View::create(camera, m_scenegraph);
 
-    // add close handler to respond to pressing the window close window button and pressing escape
+    // add close handler to respond to pressing the window close window button and pressing escape =>
+    // FIX: at the moment vistle is blocking this
     m_viewer->addEventHandler(vsg::CloseHandler::create(m_viewer));
 
     // add a trackball event handler to control the camera view use the mouse
@@ -143,7 +147,7 @@ bool VSGRenderer::composite(size_t maxQueued)
 bool VSGRenderer::render()
 {
     if (!m_viewer->active()) {
-        prepareQuit();
+        /* prepareQuit(); */
         return false;
     }
     if (!m_viewer->advanceToNextFrame())
