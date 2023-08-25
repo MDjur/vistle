@@ -1,9 +1,15 @@
 vistle_find_package(vsg)
 vistle_find_package(vsgXchange)
 
-add_module(VsgRenderer "VulkanSceneGraph remote renderer" VSGRenderer.cpp VSGRenderer.h)
-
-# include_directories(../COVER)
+add_module(
+    VsgRenderer
+    "VulkanSceneGraph remote renderer"
+    VSGRenderer.cpp
+    VSGRenderer.h
+    VSGRenderObject.h
+    VSGTimestepHandler.cpp
+    VSGTimestepHandler.h
+    TimestepSwitch.h)
 
 target_link_libraries(VsgRenderer vsg::vsg vistle_module vistle_renderer vistle_rhr)
 
