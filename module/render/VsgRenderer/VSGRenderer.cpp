@@ -5,15 +5,12 @@
 //std
 #include <iostream>
 #include <memory>
+#include <sstream>
+#include <string>
 #include <vector>
-#include <vulkan/vulkan_core.h>
 
-//vsg
-/* #include <vsg/core/Object.h> */
-/* #include <vsg/app/Trackball.h> */
-/* #include <vsg/app/Viewer.h> */
-/* #include <vsg/app/WindowTraits.h> */
-/* #include <vsg/io/FileSystem.h> */
+//vulkan
+#include <vulkan/vulkan_core.h>
 
 #ifdef vsgXchange_FOUND
 
@@ -23,24 +20,28 @@
 
 #define CERR std::cerr << "VsgRenderer: "
 
+#define DEBUG 1
+
 namespace {
 
-void printVSGMetaData(vsg::ref_ptr<vsg::Object> obj)
+std::string printVSGMetaData(vsg::ref_ptr<vsg::Object> obj)
 {
-    CERR << "Show Metadata";
+    std::stringstream ss;
+    ss << "Show Metadata";
 
     if (auto auxiliary = obj->getAuxiliary()) {
         for (auto &[key, object]: auxiliary->userObjects) {
             if (auto s = dynamic_cast<vsg::stringValue *>(object.get()))
-                CERR << "metadata key = " << key << ", stringValue = " << s->value() << std::endl;
+                ss << "metadata key = " << key << ", stringValue = " << s->value() << std::endl;
             else if (auto d = dynamic_cast<vsg::doubleValue *>(object.get()))
-                CERR << "metadata key = " << key << ", doubleValue = " << d->value() << std::endl;
+                ss << "metadata key = " << key << ", doubleValue = " << d->value() << std::endl;
             else
-                CERR << "metadata key = " << key << ", object = " << object << std::endl;
+                ss << "metadata key = " << key << ", object = " << object << std::endl;
         }
     } else {
-        CERR << "No vsg::Auxiliary assigned to Object." << std::endl;
+        ss << "No vsg::Auxiliary assigned to Object." << std::endl;
     }
+    return ss.str();
 }
 
 vsg::ref_ptr<vsg::Camera> createCameraForScene(vsg::Node *scene, int32_t x, int32_t y, uint32_t width, uint32_t height)
@@ -68,6 +69,7 @@ vsg::ref_ptr<vsg::Camera> createCameraForScene(vsg::Node *scene, int32_t x, int3
 VSGRenderer::VSGRenderer(const std::string &name, int moduleID, mpi::communicator comm)
 : Renderer(name, moduleID, comm), m_renderManager(this), m_asyncFrames(0)
 {
+    std::stringstream ss;
     // create options object that is used to guide IO operations
     auto options = vsg::Options::create();
     options->fileCache = vsg::getEnv("VSG_FILE_CACHE");
@@ -80,18 +82,37 @@ VSGRenderer::VSGRenderer(const std::string &name, int moduleID, mpi::communicato
     m_scenegraph = vsg::Group::create();
     m_scenegraph->addChild(
         vsg::read_cast<vsg::Node>(vsg::Path("/home/hpcmdjur/git/vsgExamples/data/models/teapot.vsgt")));
-    printVSGMetaData(m_scenegraph);
+#if DEBUG
+    ss << printVSGMetaData(m_scenegraph);
+#endif // DEBUG
     m_viewer = vsg::Viewer::create();
     auto windowTraits = vsg::WindowTraits::create();
     windowTraits->windowTitle = "VsgRenderer";
 
     //Vsync => VULKAN presentation mode (Immediate, FIFO, FIFO_Relaxed, Mailbox)
     windowTraits->swapchainPreferences.presentMode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
-    // number of images rendered parallel
+    // number of images rendered parallel in swapchain (3 triple buffer, 2 double buffer)
     windowTraits->swapchainPreferences.imageCount = 3;
+    windowTraits->decoration = false;
 
     auto window = vsg::Window::create(windowTraits);
     m_viewer->addWindow(window);
+
+    //some debug info
+#if DEBUG
+    auto physicalDevice = window->getOrCreatePhysicalDevice();
+    ss << "physicalDevice = " << physicalDevice << std::endl;
+    for (auto &queueFamilyProperties: physicalDevice->getQueueFamilyProperties()) {
+        ss << "    queueFamilyProperties.timestampValidBits = " << queueFamilyProperties.timestampValidBits
+           << std::endl;
+    }
+
+    const auto &limits = physicalDevice->getProperties().limits;
+    ss << "    limits.timestampComputeAndGraphics = " << limits.timestampComputeAndGraphics << std::endl;
+    ss << "    limits.timestampPeriod = " << limits.timestampPeriod << " nanoseconds." << std::endl;
+    sendInfo(ss.str());
+#endif //DEBUG
+
 
     // set up the camera
     auto camera = createCameraForScene(m_scenegraph, 0, 0, window->extent2D().width, window->extent2D().height);
@@ -117,7 +138,9 @@ VSGRenderer::VSGRenderer(const std::string &name, int moduleID, mpi::communicato
 
 VSGRenderer::~VSGRenderer()
 {
-    CERR << "destroying" << std::endl;
+#if DEBUG
+    sendInfo("destroying");
+#endif
     /* prepareQuit(); */
 }
 
@@ -132,6 +155,9 @@ VSGRenderer::~VSGRenderer()
 
 void VSGRenderer::prepareQuit()
 {
+#if DEBUG
+    sendInfo("prepare for quit");
+#endif
     removeAllObjects();
     Renderer::prepareQuit();
     m_viewer->stopThreading();
@@ -146,10 +172,9 @@ bool VSGRenderer::composite(size_t maxQueued)
 
 bool VSGRenderer::render()
 {
-    if (!m_viewer->active()) {
+    if (!m_viewer->active())
         /* prepareQuit(); */
         return false;
-    }
     if (!m_viewer->advanceToNextFrame())
         return false;
 
@@ -179,7 +204,11 @@ void VSGRenderer::removeObject(std::shared_ptr<vistle::RenderObject> ro)
 
 void VSGRenderer::connectionAdded(const vistle::Port *from, const vistle::Port *to)
 {
-    CERR << "new connection from " << *from << " to " << *to << std::endl;
+    /* #if DEBUG */
+    std::stringstream ss;
+    ss << "new connection from " << *from << " to " << *to << std::endl;
+    sendInfo(ss.str());
+    /* #endif */
     Renderer::connectionAdded(from, to);
     if (from == m_renderManager.outputPort()) {
         m_renderManager.connectionAdded(to);
@@ -201,6 +230,5 @@ bool VSGRenderer::handleMessage(const vistle::message::Message *message, const v
 
     return Renderer::handleMessage(message, payload);
 }
-
 
 MODULE_MAIN(VSGRenderer)

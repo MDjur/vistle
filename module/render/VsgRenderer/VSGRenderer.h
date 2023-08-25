@@ -10,8 +10,6 @@
 #include <vistle/renderer/parrendmgr.h>
 
 #include <vsg/all.h>
-#include <vsg/core/ref_ptr.h>
-#include <vsg/nodes/Geometry.h>
 
 class VSGRenderer: public vistle::Renderer {
 public:
