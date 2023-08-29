@@ -21,9 +21,14 @@ public:
      * @param step the timestep to add the geometry to
     */
     void addVSGObject(vsg::ref_ptr<vsg::Node> geo, const int step);
+    /*@brief Remove node from scenegraph.
+     *
+     * @param geo the geometry to add
+     * @param step the timestep to add the geometry to
+    */
+    void removeVSGObject(vsg::ref_ptr<vsg::Node> geo, const int step);
     vsg::ref_ptr<vsg::MatrixTransform> root() const { return m_root; }
     vsg::ref_ptr<TimestepSwitch> animated() const { return m_animated; }
-
     bool setTimestep(const int timestep);
 
 private:

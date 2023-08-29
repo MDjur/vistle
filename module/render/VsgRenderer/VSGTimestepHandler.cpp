@@ -19,6 +19,15 @@ void VSGTimestepHandler::addVSGObject(vsg::ref_ptr<vsg::Node> geo, const int ste
         m_animated->addChild(step, geo);
 }
 
+void VSGTimestepHandler::removeVSGObject(vsg::ref_ptr<vsg::Node> geo, const int step)
+{
+    // timestep -1 is static
+    if (step < 0)
+        m_fixed->children.clear();
+    else
+        m_animated->children.erase(m_animated->children.begin() + step);
+}
+
 bool VSGTimestepHandler::setTimestep(const int timestep)
 {
     if (!m_animated.valid() && m_animated->children.size() == 0)
