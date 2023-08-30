@@ -6,6 +6,8 @@
 #ifndef VSGRENDERER_H
 #define VSGRENDERER_H
 
+#include "VSGTimestepHandler.h"
+
 #include <vistle/renderer/renderer.h>
 #include <vistle/renderer/parrendmgr.h>
 
@@ -32,6 +34,7 @@ private:
     /* void flush(); */
 
     vistle::ParallelRemoteRenderManager m_renderManager;
+    vsg::ref_ptr<VSGTimestepHandler> m_timesteps;
     int m_asyncFrames;
     vsg::ref_ptr<vsg::Viewer> m_viewer;
     vsg::ref_ptr<vsg::Group> m_scenegraph;
