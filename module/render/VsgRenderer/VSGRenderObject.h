@@ -8,11 +8,12 @@ class VsgRenderObject: public vistle::RenderObject {
 public:
     VsgRenderObject(int senderId, const std::string &senderPort, vistle::Object::const_ptr container,
                     vistle::Object::const_ptr geometry, vistle::Object::const_ptr normals,
-                    vistle::Object::const_ptr texture, vsg::ref_ptr<vsg::Node> _node)
-    : vistle::RenderObject(senderId, senderPort, container, geometry, normals, texture), node(_node)
-    {}
+                    vistle::Object::const_ptr texture);
 
-    vsg::ref_ptr<vsg::Node> node;
+    auto geo() const { return m_geometry; }
+
+private:
+    vsg::ref_ptr<vsg::Geometry> m_geometry;
 };
 
 #endif
