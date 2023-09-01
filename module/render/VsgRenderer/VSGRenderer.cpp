@@ -1,4 +1,5 @@
 #include "VSGRenderer.h"
+#include "VSGRenderObject.h"
 #include "vistle/core/database.h"
 #include "vistle/core/message.h"
 #include "vistle/core/messages.h"
@@ -189,7 +190,10 @@ struct GeoGen {
             }
             break;
         }
+        default:
+            break;
         }
+        return geode;
     }
 
 private:
@@ -244,10 +248,6 @@ vsg::ref_ptr<vsg::Camera> createCameraForScene(vsg::Node *scene, int32_t x, int3
 VSGRenderer::VSGRenderer(const std::string &name, int moduleID, mpi::communicator comm)
 : Renderer(name, moduleID, comm), m_renderManager(this), m_asyncFrames(0)
 {
-#if DEBUG
-    std::stringstream strstream;
-#endif
-
     // create options object that is used to guide IO operations
     auto options = vsg::Options::create();
     options->fileCache = vsg::getEnv("VSG_FILE_CACHE");
@@ -257,60 +257,155 @@ VSGRenderer::VSGRenderer(const std::string &name, int moduleID, mpi::communicato
     options->add(vsgXchange::all::create());
 #endif
 
-    m_scenegraph = vsg::Group::create();
-    m_scenegraph->addChild(
-        vsg::read_cast<vsg::Node>(vsg::Path("/home/hpcmdjur/git/vsgExamples/data/models/teapot.vsgt")));
 #if DEBUG
-    strstream << printVSGMetaData(m_scenegraph);
+    std::stringstream strstream;
 #endif // DEBUG
+
     m_viewer = vsg::Viewer::create();
     auto windowTraits = vsg::WindowTraits::create();
     windowTraits->windowTitle = "VsgRenderer";
     //Vsync => VULKAN presentation mode (Immediate, FIFO, FIFO_Relaxed, Mailbox)
     windowTraits->swapchainPreferences.presentMode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
+    /* windowTraits->swapchainPreferences.presentMode = VK_PRESENT_MODE_FIFO_KHR; */
     // number of images rendered parallel in swapchain (3 triple buffer, 2 double buffer)
     windowTraits->swapchainPreferences.imageCount = 2;
-    // disables titlebar
-    windowTraits->decoration = false;
+    // enable multisampling (anti-aliasing) => VK_SAMPLE_COUNT_1_BIT = default
+    // enable wireframe polygon mode
+    auto requestFeatures = windowTraits->deviceFeatures = vsg::DeviceFeatures::create();
+    requestFeatures->get().fillModeNonSolid = VK_TRUE;
+    /* // disables titlebar */
+    /* windowTraits->decoration = false; */
 
     auto window = vsg::Window::create(windowTraits);
     m_viewer->addWindow(window);
 
+    // enable vulkan validationlayer
+    bool debugLayer = true;
+    bool lunargApiDumpLayer = false;
+    /* bool enableGeometryShader = true; */
+
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_8_BIT;
+    windowTraits->samples = samples;
+    /* VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT; */
+
+    uint32_t vulkanVersion = VK_API_VERSION_1_0;
+    if (samples != VK_SAMPLE_COUNT_1_BIT)
+        vulkanVersion = VK_API_VERSION_1_2;
+
+    // create instance
+    vsg::Names instanceExtensions;
+    vsg::Names requestedLayers;
+    if (debugLayer || lunargApiDumpLayer) {
+        instanceExtensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+        instanceExtensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
+        requestedLayers.push_back("VK_LAYER_KHRONOS_validation");
+        if (lunargApiDumpLayer)
+            requestedLayers.push_back("VK_LAYER_LUNARG_api_dump");
+    }
+
+    vsg::Names validatedNames = vsg::validateInstancelayerNames(requestedLayers);
+
+    auto instance = vsg::Instance::create(instanceExtensions, validatedNames, vulkanVersion);
+    /* auto [physicalDevice, queueFamily] = instance->getPhysicalDeviceAndQueueFamily(VK_QUEUE_GRAPHICS_BIT); */
     //some debug info about the physical device
 #if DEBUG
     auto physicalDevice = window->getOrCreatePhysicalDevice();
     strstream << "physicalDevice = " << physicalDevice << std::endl;
-    for (auto &queueFamilyProperties: physicalDevice->getQueueFamilyProperties()) {
+    for (auto &queueFamilyProperties: physicalDevice->getQueueFamilyProperties())
         strstream << "    queueFamilyProperties.timestampValidBits = " << queueFamilyProperties.timestampValidBits
                   << std::endl;
-    }
 
     const auto &limits = physicalDevice->getProperties().limits;
     strstream << "    limits.timestampComputeAndGraphics = " << limits.timestampComputeAndGraphics << std::endl;
     strstream << "    limits.timestampPeriod = " << limits.timestampPeriod << " nanoseconds." << std::endl;
-    sendInfo(strstream.str());
-#endif //DEBUG
+    if (!physicalDevice)
+        strstream << "Could not create PhysicalDevice" << std::endl;
+#endif
+    /* vsg::Names deviceExtensions; */
+    /* vsg::QueueSettings queueSettings{vsg::QueueSetting{queueFamily, {1.0}}}; */
 
-    // set up the camera
-    auto camera = createCameraForScene(m_scenegraph, 0, 0, window->extent2D().width, window->extent2D().height);
-    auto main_view = vsg::View::create(camera, m_scenegraph);
+    /* auto deviceFeatures = vsg::DeviceFeatures::create(); */
+    /* deviceFeatures->get().samplerAnisotropy = VK_TRUE; */
+    /* deviceFeatures->get().geometryShader = enableGeometryShader; */
 
-    // add close handler to respond to pressing the window close window button and pressing escape =>
-    // FIX: at the moment vistle is blocking this event when pressing escape
-    m_viewer->addEventHandler(vsg::CloseHandler::create(m_viewer));
+    /* auto device = vsg::Device::create(physicalDevice, queueSettings, validatedNames, deviceExtensions, deviceFeatures); */
+    /* auto context = vsg::Context::create(device); */
+    /* context->commandPool = vsg::CommandPool::create(device, queueFamily); */
+    /* context->graphicsQueue = device->getQueue(queueFamily); */
 
-    // add a trackball event handler to control the camera view use the mouse
-    auto main_trackball = vsg::Trackball::create(camera);
-    main_trackball->addWindow(window);
-    m_viewer->addEventHandler(main_trackball);
+    /* // set up graphics pipeline */
+    /* vsg::DescriptorSetLayoutBindings descriptorBindings{ */
+    /*     {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr} // { binding, descriptorType, descriptorCount, stageFlags, pImmutableSamplers} */
+    /* }; */
 
-    // create a command graph to render the scene on specified window
-    auto commandGraph = vsg::createCommandGraphForView(window, camera, m_scenegraph);
-    m_viewer->assignRecordAndSubmitTaskAndPresentation({commandGraph});
-    m_viewer->setupThreading();
+    /* auto descriptorSetLayout = vsg::DescriptorSetLayout::create(descriptorBindings); */
 
-    // compile all the Vulkan objects and transfer data required to render the scene
-    m_viewer->compile();
+    /* vsg::PushConstantRanges pushConstantRanges{ */
+    /*     {VK_SHADER_STAGE_VERTEX_BIT, 0, 128} // projection, view, and model matrices, actual push constant calls automatically provided by the VSG's RecordTraversal */
+    /* }; */
+
+    /* vsg::VertexInputState::Bindings vertexBindingsDescriptions{ */
+    /*     VkVertexInputBindingDescription{0, sizeof(vsg::vec3), VK_VERTEX_INPUT_RATE_VERTEX}, // vertex data */
+    /*     VkVertexInputBindingDescription{1, sizeof(vsg::vec3), VK_VERTEX_INPUT_RATE_VERTEX}, // colour data */
+    /*     VkVertexInputBindingDescription{2, sizeof(vsg::vec2), VK_VERTEX_INPUT_RATE_VERTEX}  // tex coord data */
+    /* }; */
+
+    /* vsg::VertexInputState::Attributes vertexAttributeDescriptions{ */
+    /*     VkVertexInputAttributeDescription{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0}, // vertex data */
+    /*     VkVertexInputAttributeDescription{1, 1, VK_FORMAT_R32G32B32_SFLOAT, 0}, // colour data */
+    /*     VkVertexInputAttributeDescription{2, 2, VK_FORMAT_R32G32_SFLOAT, 0}     // tex coord data */
+    /* }; */
+
+    /* vsg::GraphicsPipelineStates pipelineStates{ */
+    /*     vsg::VertexInputState::create(vertexBindingsDescriptions, vertexAttributeDescriptions), */
+    /*     vsg::InputAssemblyState::create(), */
+    /*     vsg::RasterizationState::create(), */
+    /*     vsg::MultisampleState::create(), */
+    /*     vsg::ColorBlendState::create(), */
+    /*     vsg::DepthStencilState::create()}; */
+
+    /* auto vertexShader = vsg::ShaderStage::create(); */
+    /* auto fragmentShader = vsg::ShaderStage::create(); */
+    /* auto pipelineLayout = vsg::PipelineLayout::create(vsg::DescriptorSetLayouts{descriptorSetLayout}, pushConstantRanges); */
+    /* auto graphicsPipeline = vsg::GraphicsPipeline::create(pipelineLayout, vsg::ShaderStages{vertexShader, fragmentShader}, pipelineStates); */
+    /* auto bindGraphicsPipeline = vsg::BindGraphicsPipeline::create(graphicsPipeline); */
+
+    try {
+        m_scenegraph = vsg::Group::create();
+
+        /* m_scenegraph->add(bindGraphicsPipeline); */
+        m_scenegraph->addChild(
+            vsg::read_cast<vsg::Node>(vsg::Path("/home/hpcmdjur/git/vsgExamples/data/models/teapot.vsgt")));
+
+        // set up the camera
+        auto camera = createCameraForScene(m_scenegraph, 0, 0, window->extent2D().width, window->extent2D().height);
+        auto main_view = vsg::View::create(camera, m_scenegraph);
+
+        // add close handler to respond to pressing the window close window button and pressing escape =>
+        // FIX: at the moment vistle is blocking this event
+        m_viewer->addEventHandler(vsg::CloseHandler::create(m_viewer));
+        m_viewer->addEventHandler(vsg::WindowResizeHandler::create());
+
+        // add a trackball event handler to control the camera view use the mouse
+        auto main_trackball = vsg::Trackball::create(camera);
+        main_trackball->addWindow(window);
+        m_viewer->addEventHandler(main_trackball);
+
+        // create a command graph to render the scene on specified window
+        auto commandGraph = vsg::createCommandGraphForView(window, camera, m_scenegraph);
+        m_viewer->assignRecordAndSubmitTaskAndPresentation({commandGraph});
+        m_viewer->setupThreading();
+
+#if DEBUG
+        strstream << printVSGMetaData(m_scenegraph);
+#endif
+
+        // compile all the Vulkan objects and transfer data required to render the scene
+        m_viewer->compile();
+    } catch (vsg::Exception &e) {
+        strstream << "VSG Exception: " << e.message << ". Result: " << e.result << std::endl;
+        sendInfo(strstream.str());
+    }
 }
 
 VSGRenderer::~VSGRenderer()
@@ -367,29 +462,24 @@ std::shared_ptr<vistle::RenderObject> VSGRenderer::addObject(int senderId, const
                                                              vistle::Object::const_ptr normals,
                                                              vistle::Object::const_ptr texture)
 {
-    /* std::shared_ptr<vistle::RenderObject> ro; */
-    /* VistleGeometryGenerator gen(ro, geometry, normals, texture); */
-    /* if (VistleGeometryGenerator::isSupported(geometry->getType()) || */
-    /*     geometry->getType() == vistle::Object::PLACEHOLDER) { */
-    /*     auto geode = gen(defaultState); */
-
-    /*     if (geode) { */
-    /*         ro.reset(new OsgRenderObject(senderId, senderPort, container, geometry, normals, texture, geode)); */
-    /*         m_timesteps->addObject(geode, ro->timestep); */
-    /*     } */
-    /* } */
-
-    /* m_renderManager.addObject(ro); */
-
-    /* return ro; */
-    return std::make_shared<vistle::RenderObject>(senderId, senderPort, container, geometry, normals, texture);
+    auto ro = std::make_shared<VsgRenderObject>(senderId, senderPort, container, geometry, normals, texture);
+    m_scenegraph->addChild(ro->geo());
+    /* auto transform = vsg::MatrixTransform::create(); */
+    /* m_scenegraph->addChild(transform); */
+    /* transform->addChild(ro->geo()); */
+    m_renderManager.addObject(ro);
+    m_viewer->compile();
+    return ro;
 }
 
 void VSGRenderer::removeObject(std::shared_ptr<vistle::RenderObject> ro)
 {
-    /* auto oro = std::static_pointer_cast<OsgRenderObject>(ro); */
     /* timesteps->removeObject(oro->node, oro->timestep); */
-    m_renderManager.removeObject(ro);
+    auto vro = std::static_pointer_cast<VsgRenderObject>(ro);
+    m_renderManager.removeObject(vro);
+    // TODO: remove from scenegraph with timestephandler
+    /* m_scenegraph->children[ro->timestep]; */
+    m_viewer->compile();
 }
 
 void VSGRenderer::connectionAdded(const vistle::Port *from, const vistle::Port *to)

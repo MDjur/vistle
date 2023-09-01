@@ -7,6 +7,7 @@ add_module(
     VSGRenderer.cpp
     VSGRenderer.h
     VSGRenderObject.h
+    VSGRenderObject.cpp
     VSGTimestepHandler.cpp
     VSGTimestepHandler.h
     TimestepSwitch.h)
