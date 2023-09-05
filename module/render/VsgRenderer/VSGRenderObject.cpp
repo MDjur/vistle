@@ -1,10 +1,7 @@
 #include "VSGRenderObject.h"
 #include <sstream>
 #include <vistle/core/triangles.h>
-#include <vsg/commands/BindIndexBuffer.h>
-#include <vsg/commands/BindVertexBuffers.h>
 #include <vsg/core/Data.h>
-#include <vsg/utils/Builder.h>
 
 using namespace vistle;
 
@@ -21,10 +18,10 @@ VsgRenderObject::VsgRenderObject(int senderId, const std::string &senderPort, vi
     auto texcoords = vsg::vec2Array::create();
     /* auto colors = vsg::vec4Array::create(); */
     /* auto indices = vsg::ushortArray::create(); */
-    /* vsg::ref_ptr<vsg::vec3Array> vertices; */
+    vsg::ref_ptr<vsg::vec3Array> vertices;
     /* vsg::ref_ptr<vsg::vec2Array> texcoords; */
-    /* vsg::ref_ptr<vsg::vec4Array> colors; */
-    /* vsg::ref_ptr<vsg::ushortArray> indices; */
+    vsg::ref_ptr<vsg::vec4Array> colors;
+    vsg::ref_ptr<vsg::ushortArray> indices;
 
     // fill texture coordinates
     if (auto t = Texture1D::as(mapdata)) {
@@ -64,8 +61,9 @@ VsgRenderObject::VsgRenderObject(int senderId, const std::string &senderPort, vi
         auto numElem = tri->getNumElements();
         auto numCoords = tri->getNumCoords();
         auto numCorners = tri->getNumCorners();
-        auto vertices = vsg::vec3Array::create(numCoords);
-        auto indices = vsg::ushortArray::create(numElem * 3);
+
+        vertices = vsg::vec3Array::create(numCoords);
+        indices = vsg::ushortArray::create(numElem * 3);
 
         //unref after transfer to gpu
         vertices->properties.dataVariance = vsg::STATIC_DATA_UNREF_AFTER_TRANSFER;
@@ -73,8 +71,6 @@ VsgRenderObject::VsgRenderObject(int senderId, const std::string &senderPort, vi
         auto triX = tri->x();
         auto triY = tri->y();
         auto triZ = tri->z();
-
-        vertices = vsg::vec3Array::create(numCoords);
 
         for (auto i = 0; i < numCoords; ++i)
             vertices->set(i, vsg::vec3(triX[i], triY[i], triZ[i]));
@@ -87,19 +83,12 @@ VsgRenderObject::VsgRenderObject(int senderId, const std::string &senderPort, vi
             }
         }
 
-        m_geometry->assignArrays(vsg::DataList{vertices});
-        m_geometry->assignIndices(indices);
-        m_geometry->commands.push_back(vsg::DrawIndexed::create(indices->size(), 1, 0, 0, 0));
-
         debug << "Tri: #: " << numElem << ", #corners: " << numCorners << ", #coord: " << numCoords << std::endl;
-        vsg::Builder builder;
-        vsg::GeometryInfo geoinfo;
-        builder.createQuad();
     }
 
-    /* m_geometry->assignArrays(vsg::DataList{vertices, colors, texcoords}); */
-    /* m_geometry->assignIndices(indices); */
-    /* m_geometry->commands.push_back(vsg::DrawIndexed::create(indices->size(), 1, 0, 0, 0)); */
+    m_geometry->assignArrays(vsg::DataList{vertices, colors, texcoords});
+    m_geometry->assignIndices(indices);
+    m_geometry->commands.push_back(vsg::DrawIndexed::create(indices->size(), 1, 0, 0, 0));
 
     std::cerr << debug.str() << std::endl;
 }

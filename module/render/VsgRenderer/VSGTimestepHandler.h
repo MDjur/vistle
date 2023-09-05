@@ -7,34 +7,39 @@
 #ifndef VSGTIMESTEPHANDLER_H
 #define VSGTIMESTEPHANDLER_H
 
+#include "utils/TimestepSwitch.h"
 #include <vistle/core/vectortypes.h>
 #include <vsg/all.h>
-#include "TimestepSwitch.h"
 
 class VSGTimestepHandler: public vsg::Inherit<vsg::Object, VSGTimestepHandler> {
 public:
-    explicit VSGTimestepHandler();
+    explicit VSGTimestepHandler(vsg::ref_ptr<vsg::Viewer> in_viewer);
 
-    /*@brief Add a geometry to the scenegraph, either to the static or animated part.
+    /*@brief Add a geometry to root, either to the static (step = -1) or animated part (step > -1).
      *
      * @param geo the geometry to add
-     * @param step the timestep to add the geometry to
+     * @param step the timestep of geo
     */
-    void addVSGObject(vsg::ref_ptr<vsg::Node> geo, const int step);
-    /*@brief Remove node from scenegraph.
+    void addNode(vsg::ref_ptr<vsg::Node> geo, const int step);
+
+    /*@brief Remove node from root.
      *
-     * @param geo the geometry to add
-     * @param step the timestep to add the geometry to
+     * @param geo the geometry to remove
+     * @param step the timestep of geo
     */
-    void removeVSGObject(vsg::ref_ptr<vsg::Node> geo, const int step);
+    void removeNode(vsg::ref_ptr<vsg::Node> geo, const int step);
     vsg::ref_ptr<vsg::MatrixTransform> root() const { return m_root; }
     vsg::ref_ptr<TimestepSwitch> animated() const { return m_animated; }
     bool setTimestep(const int timestep);
 
 private:
+    template<typename VSGNodeType>
+    void addThreadSafe(vsg::ref_ptr<VSGNodeType> attachTo, vsg::ref_ptr<vsg::Node> node);
+
     vsg::ref_ptr<vsg::MatrixTransform> m_root;
     vsg::ref_ptr<vsg::Group> m_fixed;
     vsg::ref_ptr<TimestepSwitch> m_animated;
+    vsg::observer_ptr<vsg::Viewer> m_viewer;
 
 protected:
     virtual ~VSGTimestepHandler() {}
