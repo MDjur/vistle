@@ -2,11 +2,13 @@
 #include "utils/operations.h"
 #include <vsg/app/Viewer.h>
 
-VSGTimestepHandler::VSGTimestepHandler(vsg::ref_ptr<vsg::Viewer> in_viewer): m_viewer(in_viewer)
+VSGTimestepHandler::VSGTimestepHandler(vsg::ref_ptr<vsg::Viewer> in_viewer, int in_numTimesteps, int in_stepWith,
+                                       int in_firstTimestep)
+: m_viewer(in_viewer)
 {
     m_root = vsg::MatrixTransform::create();
     m_fixed = vsg::Group::create();
-    m_animated = TimestepSwitch::create(0);
+    m_animated = TimestepSwitch::create(in_numTimesteps, in_stepWith, in_firstTimestep);
 
     m_root->addChild(m_fixed);
     m_root->addChild(m_animated);
@@ -40,15 +42,6 @@ void VSGTimestepHandler::removeNode(vsg::ref_ptr<vsg::Node> geo, const int step)
         /* auto children = m_animated->children; */
         /* children.erase(std::remove(children.begin(), children.end(), geo), children.end()); */
     }
-}
-
-bool VSGTimestepHandler::setTimestep(const int timestep)
-{
-    if (!m_animated.valid() && m_animated->children.size() == 0)
-        return false;
-
-    m_animated->setSingleChildOn(timestep);
-    return true;
 }
 
 template<typename VSGGroupNodeType>

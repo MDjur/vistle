@@ -13,7 +13,8 @@
 
 class VSGTimestepHandler: public vsg::Inherit<vsg::Object, VSGTimestepHandler> {
 public:
-    explicit VSGTimestepHandler(vsg::ref_ptr<vsg::Viewer> in_viewer);
+    explicit VSGTimestepHandler(vsg::ref_ptr<vsg::Viewer> in_viewer, int in_numTimesteps, int in_stepWith,
+                                int in_firstTimestep);
 
     /*@brief Add a geometry to root, either to the static (step = -1) or animated part (step > -1).
      *
@@ -30,7 +31,6 @@ public:
     void removeNode(vsg::ref_ptr<vsg::Node> geo, const int step);
     vsg::ref_ptr<vsg::MatrixTransform> root() const { return m_root; }
     vsg::ref_ptr<TimestepSwitch> animated() const { return m_animated; }
-    bool setTimestep(const int timestep);
 
 private:
     template<typename VSGNodeType>

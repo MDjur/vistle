@@ -7,6 +7,7 @@
 #include "vistle/core/messages.h"
 #include "vistle/core/object.h"
 #include <vistle/core/points.h>
+#include "vistle/module/module.h"
 #include "vistle/renderer/renderer.h"
 #include <vistle/core/placeholder.h>
 
@@ -466,7 +467,8 @@ std::vector<vsg::ref_ptr<vsg::StateCommand>> VSGRenderer::setupVulkanGraphicsPip
 
 void VSGRenderer::initScene(vsg::ref_ptr<vsg::Node> node, vsg::ref_ptr<vsg::Window> window)
 {
-    m_timesteps = VSGTimestepHandler::create(m_viewer);
+    // FIXME: numTimesteps() is not yet set
+    m_timesteps = VSGTimestepHandler::create(m_viewer, numTimesteps(), 1, 0);
     m_scenegraph->addChild(m_timesteps->root());
 
     if (node.valid())
@@ -480,6 +482,7 @@ void VSGRenderer::initScene(vsg::ref_ptr<vsg::Node> node, vsg::ref_ptr<vsg::Wind
     // FIX: at the moment vistle is blocking this event
     m_viewer->addEventHandler(vsg::CloseHandler::create(m_viewer));
     m_viewer->addEventHandler(vsg::WindowResizeHandler::create());
+    m_viewer->addEventHandler(AnimateTimestepSwitch::create(m_timesteps->animated(), m_viewer->start_point()));
 
     // add a trackball event handler to control the camera view use the mouse
     auto main_trackball = vsg::Trackball::create(camera);
