@@ -226,7 +226,8 @@ std::string printVSGMetaData(vsg::ref_ptr<vsg::Object> obj)
     return ss.str();
 }
 
-/*@brief Create a camera to view the scene graph.
+/**
+ * @brief Create a camera to view the scene graph.
  * @param scene the scenegraph to view
  * @param x the x position of the lower left corner of the view port
  * @param y the y position of the lower left corner of the view port
