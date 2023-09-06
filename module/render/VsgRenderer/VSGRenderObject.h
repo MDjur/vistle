@@ -3,7 +3,9 @@
 #include <vsg/all.h>
 #include <vistle/renderer/renderer.h>
 
-
+/**
+ * Implementation of vistle::RenderObject to convert vistle::Object to vsg::Geometry.
+ */
 class VsgRenderObject: public vistle::RenderObject {
 public:
     VsgRenderObject(int senderId, const std::string &senderPort, vistle::Object::const_ptr container,

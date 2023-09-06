@@ -1,14 +1,15 @@
-//@brief TimestepSwitch is an extension of vsg::Switch to handle the different timesteps.
-//It is used by the VSGTimestepHandler.
-//
-// Created by Marko Djuric on 25.08.23.
-//
-
 #ifndef TIMESTEPSWITCH_H
 #define TIMESTEPSWITCH_H
 
 #include <vsg/all.h>
 
+/**
+ * Implementation of vsg::Switch to handle timestep animation.
+ *
+ * TimestepSwitch is an extension of vsg::Switch to handle timestep animation.
+ * It is used by the VSGTimestepHandler.
+ *
+ */
 class TimestepSwitch: public vsg::Inherit<vsg::Switch, TimestepSwitch> {
 public:
     TimestepSwitch(int in_numTimesteps = 1, int in_stepWith = 1, int in_firstTimestep = -1)
@@ -20,6 +21,12 @@ public:
     auto numTimesteps() const { return m_numTimesteps; }
     auto stepWith() const { return m_stepWith; }
 
+    /**
+     * @brief Add a child to the switch which holds meta data "timestep". E.g. node->setValue("timestep", timestep).
+     * The child will be inserted at the position timestep if timestep is available.
+     *
+     * @param child the child to add with meta data "timestep".
+     */
     void addChild(vsg::ref_ptr<vsg::Node> child)
     {
         int timestep;
@@ -29,6 +36,11 @@ public:
         }
     }
 
+    /**
+     * @brief Traverse the switch and enable all children for the current timestep.
+     *
+     * @return true if the current timestep is valid, false otherwise.
+     */
     bool traverseTime()
     {
         auto numAllBlocks = children.size();
@@ -59,6 +71,8 @@ private:
     int m_currentTimestep;
 
 protected:
-    virtual ~TimestepSwitch() {}
+    virtual ~TimestepSwitch() {
+    } // hide from shared_ptr und explicit deletion. E.g. use "vsg::ref_ptr<TimestepSwitch> ts_ptr = TimestepSwitch::create();""
+    // => "std::shared_ptr<TimestepSwitch> ts_ptr = std::make_shared<TimestepSwitch>(...)" or "delete ts_ptr" will no longer compile
 };
 #endif

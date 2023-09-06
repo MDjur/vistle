@@ -1,9 +1,22 @@
+/** 
+ * @file operations.h
+ *
+ * @brief Contains custom opartions which can be used to handle update events while rendering
+ *
+ * @author Marko Djuric
+ * Contact: marko.djuric@gmx.de
+ */
 #ifndef OPERATION_H
 #define OPERATION_H
 
 #include <iostream>
 #include <vsg/all.h>
 
+/** 
+ * Implementation of vsg::Operation to add new node to currently rendered scene.
+ * 
+ * Operation which updates CompileResult via viewer until it is valid and then adds node to attachmentPoint.
+ */
 template<typename VSGGroupNodeType>
 struct Merge: public vsg::Inherit<vsg::Operation, Merge<VSGGroupNodeType>> {
     Merge(vsg::observer_ptr<vsg::Viewer> in_viewer, vsg::ref_ptr<VSGGroupNodeType> in_attachmentPoint,
@@ -16,6 +29,9 @@ struct Merge: public vsg::Inherit<vsg::Operation, Merge<VSGGroupNodeType>> {
     vsg::ref_ptr<vsg::Node> node;
     vsg::CompileResult compileResult;
 
+    /**
+     # @overload void run()
+     */
     void run() override
     {
         std::cout << "Merge::run() attachmentpoint = " << attachmentPoint << ", " << node << std::endl;
