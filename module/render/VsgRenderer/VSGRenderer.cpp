@@ -2,6 +2,8 @@
 #include "VSGRenderObject.h"
 #include "VSGTimestepHandler.h"
 #include "utils/visitors.h"
+
+//vistle
 #include "vistle/core/database.h"
 #include "vistle/core/message.h"
 #include "vistle/core/messages.h"
@@ -34,178 +36,11 @@
 using namespace vistle;
 namespace {
 
-const int NumPrimitives = 100000;
-const bool IndexGeo = true;
-
-bool isSupported(vistle::Object::Type t)
-{
-    switch (t) {
-    case vistle::Object::POINTS:
-    case vistle::Object::LINES:
-    case vistle::Object::TRIANGLES:
-    case vistle::Object::QUADS:
-    case vistle::Object::POLYGONS:
-    case vistle::Object::LAYERGRID:
-        return true;
-
-    default:
-        return false;
-    }
-}
-
-struct GeoGen {
-    GeoGen(std::shared_ptr<vistle::RenderObject> _ro, vistle::Object::const_ptr _geo, vistle::Object::const_ptr _normal,
-           vistle::Object::const_ptr _mapped)
-    : m_renderObj(_ro), m_geo(_geo), m_normals(_normal), m_mapped(_mapped)
-    {}
-
-    auto Geo() { return m_geo; }
-    auto Normals() { return m_normals; }
-    auto Mapped() { return m_mapped; }
-    auto RenderObj() { return m_renderObj; }
-
-    vsg::ref_ptr<vsg::StateGroup> operator()(vsg::ref_ptr<vsg::StateCommand> cmd)
-    {
-        auto geode = vsg::StateGroup::create();
-        if (m_renderObj)
-            m_renderObj->updateBounds();
-
-        if (!m_geo)
-            return geode;
-
-        auto nodename = m_geo->getName();
-        geode->setValue("name", nodename);
-
-        std::stringstream debug;
-
-        debug << nodename << " ";
-        debug << "[";
-        debug << (m_geo ? "G" : ".");
-        debug << (m_normals ? "N" : ".");
-        debug << (m_mapped ? "T" : ".");
-        debug << "] ";
-
-        int t = m_geo->getTimestep();
-        if (t < 0 && m_normals)
-            t = m_normals->getTimestep();
-        if (t < 0 && m_mapped)
-            t = m_mapped->getTimestep();
-
-        int b = m_geo->getBlock();
-        if (b < 0 && m_normals)
-            b = m_normals->getBlock();
-        if (b < 0 && m_mapped)
-            b = m_mapped->getBlock();
-
-        debug << "b " << b << ", t " << t << " ";
-
-        auto cmds = vsg::Commands::create();
-        auto transparent = false;
-        auto numPrimitives = NumPrimitives;
-        if (m_geo) {
-            if (m_geo->hasAttribute("_transparent"))
-                transparent = m_geo->getAttribute("_transparent") != "false";
-            if (m_geo->hasAttribute("_bin_num_primitives")) {
-                auto numPrim = m_geo->getAttribute("_bin_num_primitives");
-                numPrimitives = atol(numPrim.c_str());
-            }
-        }
-        vsg::material material;
-        if (m_renderObj && m_renderObj->hasSolidColor) {
-            const auto &color = m_renderObj->solidColor;
-            material.ambientColor = vsg::vec4(color[0], color[1], color[2], 1.0);
-            material.diffuseColor = vsg::vec4(color[0], color[1], color[2], 1.0);
-            material.specularColor = vsg::vec4(0.2, 0.2, 0.2, 1.0);
-            if (color[3] > 0.f && color[3] < 1.f)
-                transparent = true;
-        }
-
-        bool indexGeo = IndexGeo;
-        auto norm = vistle::Normals::as(m_normals);
-        if (m_normals) {
-            auto mapping = norm->guessMapping(m_geo);
-            // support only vertex mapping for now
-            if (mapping != vistle::DataBase::Vertex) {
-                indexGeo = false;
-                debug << "NoIndex: normals ";
-            }
-        }
-
-        auto database = vistle::DataBase::as(m_mapped);
-        auto mapping = vistle::DataBase::Unspecified;
-        if (database) {
-            mapping = database->guessMapping(m_geo);
-            // support only vertex mapping for now
-            if (mapping != vistle::DataBase::Vertex) {
-                indexGeo = false;
-                debug << "NoIndex: data ";
-            }
-        }
-
-        switch (m_geo->getType()) {
-        case vistle::Object::PLACEHOLDER: {
-            auto placeholder = vistle::PlaceHolder::as(m_geo);
-            debug << "Placeholder [" << placeholder->originalName() << "]";
-            if (isSupported(placeholder->originalType())) {
-                nodename = placeholder->originalName();
-                geode->setValue("name", nodename);
-            }
-            break;
-        }
-        case vistle::Object::POINTS: {
-            indexGeo = false;
-            vistle::Points::const_ptr points = vistle::Points::as(m_geo);
-            const auto numVertices = points->getNumPoints();
-
-            debug << "Points: [ #v " << numVertices << " ]";
-
-            auto geom = vsg::Geometry::create();
-            cmds->addChild(geom);
-
-            if (numVertices > 0) {
-                const auto x = &points->x()[0];
-                const auto y = &points->y()[0];
-                const auto z = &points->z()[0];
-                auto vertices = vsg::vec3Array::create(numVertices);
-
-                vertices->properties.dataVariance = vsg::DYNAMIC_DATA;
-                vsg::ref_ptr<vsg::uintArray> indices;
-                for (Index v = 0; v < numVertices; ++v) {
-                    vertices->set(v, vsg::vec3(x[v], y[v], z[v]));
-                    indices->set(v, v);
-                }
-
-                geom->assignArrays(vsg::DataList{vertices});
-                geom->assignIndices(indices);
-                /* geom-> */
-
-                /* geom->assignArrays(vertices); */
-                /* geom->setVertexArray(vertices.get()); */
-                /* auto ps = new osg::DrawArrays(osg::PrimitiveSet::POINTS, 0, numVertices); */
-                /* geom->addPrimitiveSet(ps); */
-                /* if (m_cache) { */
-                /*     cache.vertices.push_back(vertices); */
-                /*     cache.primitives.push_back(ps); */
-                /* } */
-
-                /* state->setAttribute(new osg::Point(2.0f), osg::StateAttribute::ON); */
-                /* lighted = false; */
-            }
-            break;
-        }
-        default:
-            break;
-        }
-        return geode;
-    }
-
-private:
-    std::shared_ptr<vistle::RenderObject> m_renderObj;
-    vistle::Object::const_ptr m_geo;
-    vistle::Object::const_ptr m_normals;
-    vistle::Object::const_ptr m_mapped;
-};
-
+/**
+ * @brief Print metadata of a vsg::Object add via obj->setValue("value", value).
+ * @param obj the vsg::Object to print metadata from
+ * @return string with metadata
+ */
 std::string printVSGMetaData(vsg::ref_ptr<vsg::Object> obj)
 {
     std::stringstream ss;
@@ -234,7 +69,7 @@ std::string printVSGMetaData(vsg::ref_ptr<vsg::Object> obj)
  * @param width the width of the view port
  * @param height the height of the view port
  * @return the camera to view the scene
-*/
+ */
 vsg::ref_ptr<vsg::Camera> createCameraForScene(vsg::Node *scene, int32_t x, int32_t y, uint32_t width, uint32_t height)
 {
     // compute the bounds of the scene graph to help position camera

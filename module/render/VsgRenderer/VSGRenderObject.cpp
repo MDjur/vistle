@@ -4,6 +4,23 @@
 #include <vsg/core/Data.h>
 
 using namespace vistle;
+namespace {
+bool isSupported(vistle::Object::Type t)
+{
+    switch (t) {
+    case vistle::Object::POINTS:
+    case vistle::Object::LINES:
+    case vistle::Object::TRIANGLES:
+    case vistle::Object::QUADS:
+    case vistle::Object::POLYGONS:
+    case vistle::Object::LAYERGRID:
+        return true;
+
+    default:
+        return false;
+    }
+}
+} // namespace
 
 VsgRenderObject::VsgRenderObject(int senderId, const std::string &senderPort, vistle::Object::const_ptr container,
                                  vistle::Object::const_ptr geometry, vistle::Object::const_ptr normals,
