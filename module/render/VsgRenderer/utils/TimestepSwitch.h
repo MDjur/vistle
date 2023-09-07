@@ -17,9 +17,9 @@ public:
     {}
 
     auto getCurrentTimestep() const { return m_currentTimestep; }
-    auto &numTimesteps() { return m_numTimesteps; }
-    auto &numTimesteps() const { return m_numTimesteps; }
-    auto stepWith() const { return m_stepWith; }
+    auto getNumTimesteps() { return m_numTimesteps; }
+    auto getNumTimesteps() const { return m_numTimesteps; }
+    auto getStepWith() const { return m_stepWith; }
 
     /**
      * @brief Add a child to the switch which holds meta data "timestep". E.g. node->setValue("timestep", timestep).
