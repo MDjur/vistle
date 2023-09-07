@@ -15,8 +15,7 @@
  */
 class VSGTimestepHandler: public vsg::Inherit<vsg::Object, VSGTimestepHandler> {
 public:
-    explicit VSGTimestepHandler(vsg::ref_ptr<vsg::Viewer> in_viewer, int in_numTimesteps, int in_stepWith,
-                                int in_firstTimestep);
+    explicit VSGTimestepHandler(vsg::ref_ptr<vsg::Viewer> in_viewer, int in_stepWith, int in_firstTimestep);
 
     /**
      * @brief Add a geometry to root, either to the static (step = -1) or animated part (step > -1).
@@ -27,7 +26,7 @@ public:
     void addNode(vsg::ref_ptr<vsg::Node> geo, const int step);
 
     /**
-     * @brief Remove node from root.
+     * @brief Remove a geometry from root, either to the static (step = -1) or animated part (step > -1).
      *
      * @param geo the geometry to remove
      * @param step the timestep of geo

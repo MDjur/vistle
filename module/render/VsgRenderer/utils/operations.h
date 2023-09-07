@@ -30,7 +30,7 @@ struct Merge: public vsg::Inherit<vsg::Operation, Merge<VSGGroupNodeType>> {
     vsg::CompileResult compileResult;
 
     /**
-     # @overload void run()
+     * @copydoc void run()
      */
     void run() override
     {

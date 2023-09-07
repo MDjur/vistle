@@ -19,20 +19,48 @@ public:
     ~VSGRenderer() override;
 
 private:
+    /* bool compute() override; */
+    /* bool compute(const std::shared_ptr<vistle::BlockTask> &task) const override; */
+    /** 
+     * @copydoc bool render()  
+     */
     bool render() override;
+    /** 
+     * @copydoc void prepareQuit()  
+     */
     void prepareQuit() override;
+    /** 
+     * @copydoc void connectionAdded(const vistle::Port *from, const vistle::Port *to)
+     */
     void connectionAdded(const vistle::Port *from, const vistle::Port *to) override;
+    /** 
+     * @copydoc void connectionRemoved(const vistle::Port *from, const vistle::Port *to)
+     */
     void connectionRemoved(const vistle::Port *from, const vistle::Port *to) override;
+    /** 
+     * @copydoc std::shared_ptr<vistle::RenderObject> addObject(int senderId, const std::string &senderPort,
+                                                    vistle::Object::const_ptr container,
+                                                    vistle::Object::const_ptr geometry,
+                                                    vistle::Object::const_ptr normals,
+                                                    vistle::Object::const_ptr texture)
+     */
     std::shared_ptr<vistle::RenderObject> addObject(int senderId, const std::string &senderPort,
                                                     vistle::Object::const_ptr container,
                                                     vistle::Object::const_ptr geometry,
                                                     vistle::Object::const_ptr normals,
                                                     vistle::Object::const_ptr texture) override;
+    /** 
+     * @copydoc void connectionRemoved(const vistle::Port *from, const vistle::Port *to)
+     */
     bool handleMessage(const vistle::message::Message *message, const vistle::MessagePayload &payload) override;
+    /** 
+     * @copydoc void removeObject(std::shared_ptr<vistle::RenderObject> ro)
+     */
     void removeObject(std::shared_ptr<vistle::RenderObject> ro) override;
     void initScene(vsg::ref_ptr<vsg::Node> node, vsg::ref_ptr<vsg::Window> window);
 
-    /* @brief Create descriptorsets for textures, fragement and vertex shaders. 
+    /**
+     * @brief Create descriptorsets for textures, fragement and vertex shaders. 
      * Desriptorsets are used to define how resources (Image, Sampler, Buffer, Acceleration structure) can be accessed.
      * Each command in the graphics pipeline can access one or more suitable descriptorsets (commands which can handle descriptorSet) to access resources.
      * 
@@ -50,6 +78,11 @@ private:
     vsg::ref_ptr<vsg::Viewer> m_viewer;
     vsg::ref_ptr<vsg::StateGroup> m_scenegraph;
     vsg::ref_ptr<vsg::MatrixTransform> m_transform;
+
+    int m_numBlocks = 0;
+    int m_numAnimationsSteps = 0;
+    int m_numTotalTimesteps = 0;
+    bool m_firstComputeCall = true;
 };
 
 #endif

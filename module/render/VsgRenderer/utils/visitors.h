@@ -42,6 +42,9 @@ public:
     vsg::clock::time_point start;
     double time = 0.0;
 
+    /**
+     * @copydoc void apply(vsg::FrameEvent &frame)
+     */
     void apply(vsg::FrameEvent &frame) override
     {
         vsg::ref_ptr<TimestepSwitch> ts_ptr = m_timestepSwitch;
