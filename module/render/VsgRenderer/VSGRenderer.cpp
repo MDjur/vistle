@@ -213,7 +213,6 @@ VSGRenderer::VSGRenderer(const std::string &name, int moduleID, mpi::communicato
     for (auto &cmd: stateCommands)
         m_scenegraph->addChild(cmd);
     initScene(vsg::read_cast<vsg::Node>(vsg::Path("/home/hpcmdjur/git/vsgExamples/data/models/teapot.vsgt")), window);
-
     /* try { */
     /*     initScene(vsg::read_cast<vsg::Node>(vsg::Path("/home/hpcmdjur/git/vsgExamples/data/models/teapot.vsgt")), */
     /*               window); */
@@ -275,7 +274,7 @@ std::vector<vsg::ref_ptr<vsg::StateCommand>> VSGRenderer::setupVulkanGraphicsPip
     // set up search paths to SPIRV shaders and textures
     vsg::Paths searchPaths = vsg::getEnvPaths("VSG_FILE_PATH");
 
-    // load shaders from vsgExamples
+    // load shaders from vsgExamples => export VSG_FILE_PATH=<path to vsgExamples>/data
     vsg::ref_ptr<vsg::ShaderStage> vertexShader = vsg::ShaderStage::read(
         VK_SHADER_STAGE_VERTEX_BIT, "main", vsg::findFile("shaders/vert_PushConstants.spv", searchPaths));
     vsg::ref_ptr<vsg::ShaderStage> fragmentShader = vsg::ShaderStage::read(
@@ -303,8 +302,7 @@ std::vector<vsg::ref_ptr<vsg::StateCommand>> VSGRenderer::setupVulkanGraphicsPip
 
 void VSGRenderer::initScene(vsg::ref_ptr<vsg::Node> node, vsg::ref_ptr<vsg::Window> window)
 {
-    // FIXME: numTimesteps() is not yet set
-    m_timesteps = VSGTimestepHandler::create(m_viewer, numTimesteps(), 1, 0);
+    m_timesteps = VSGTimestepHandler::create(m_viewer, 1, 0);
     m_scenegraph->addChild(m_timesteps->root());
 
     if (node.valid())
@@ -315,7 +313,7 @@ void VSGRenderer::initScene(vsg::ref_ptr<vsg::Node> node, vsg::ref_ptr<vsg::Wind
     auto main_view = vsg::View::create(camera, m_scenegraph);
 
     // add close handler to respond to pressing the window close window button and pressing escape =>
-    // FIX: at the moment vistle is blocking this event
+    // FIXME: at the moment vistle is blocking this event
     m_viewer->addEventHandler(vsg::CloseHandler::create(m_viewer));
     m_viewer->addEventHandler(vsg::WindowResizeHandler::create());
     m_viewer->addEventHandler(AnimateTimestepSwitch::create(m_timesteps->animated(), m_viewer->start_point()));
@@ -375,6 +373,7 @@ bool VSGRenderer::render()
     m_viewer->recordAndSubmit();
     m_viewer->update();
     m_viewer->present();
+    // fps
     /* auto fs = m_viewer->getFrameStamp(); */
     /* double fps = */
     /*     static_cast<double>(fs->frameCount) / */
@@ -393,31 +392,28 @@ std::shared_ptr<vistle::RenderObject> VSGRenderer::addObject(int senderId, const
                                                              vistle::Object::const_ptr normals,
                                                              vistle::Object::const_ptr texture)
 {
-    auto ro = std::make_shared<VsgRenderObject>(senderId, senderPort, container, geometry, normals, texture);
-    auto t = ro->timestep;
-    m_timesteps->addNode(ro->geo(), t);
-    m_renderManager.addObject(ro);
-    /* if (t == numTimesteps() - 1) */
-    /*     m_viewer->compile(); */
-    return ro;
+    auto vro = std::make_shared<VsgRenderObject>(senderId, senderPort, container, geometry, normals, texture);
+    auto t = vro->timestep;
+    m_timesteps->addNode(vro->geo(), t);
+    m_renderManager.addObject(vro);
+    return vro;
 }
 
 void VSGRenderer::removeObject(std::shared_ptr<vistle::RenderObject> ro)
 {
     auto vro = std::static_pointer_cast<VsgRenderObject>(ro);
     auto t = vro->timestep;
-    // TODO: remove from scenegraph with timestephandler
     m_timesteps->removeNode(vro->geo(), t);
     m_renderManager.removeObject(vro);
-    /* if (t == numTimesteps() - 1) */
-    /*     m_viewer->compile(); */
 }
 
 void VSGRenderer::connectionAdded(const vistle::Port *from, const vistle::Port *to)
 {
+#if DEBUG
     std::stringstream ss;
     ss << "new connection from " << *from << " to " << *to << std::endl;
     sendInfo(ss.str());
+#endif
     Renderer::connectionAdded(from, to);
     if (from == m_renderManager.outputPort()) {
         m_renderManager.connectionAdded(to);

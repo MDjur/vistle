@@ -13,13 +13,17 @@
 class TimestepSwitch: public vsg::Inherit<vsg::Switch, TimestepSwitch> {
 public:
     TimestepSwitch(int in_stepWith = 1, int in_firstTimestep = 0)
-    : m_blocksPerTimestep(0), m_numTimesteps(1), m_stepWith(in_stepWith), m_currentTimestep(in_firstTimestep)
+    : m_stepWith(in_stepWith), m_currentTimestep(in_firstTimestep)
     {}
 
+    auto getNumTimesteps() const { return children.size(); }
     auto getCurrentTimestep() const { return m_currentTimestep; }
-    auto getNumTimesteps() { return m_numTimesteps; }
-    auto getNumTimesteps() const { return m_numTimesteps; }
     auto getStepWith() const { return m_stepWith; }
+
+    /**
+     * @brief Set the current timestep and activate the corresponding children.
+     */
+    void setCurrentTimestep(int timestep);
 
     /**
      * @brief Add a child to the switch which holds meta data "timestep". E.g. node->setValue("timestep", timestep).
@@ -31,11 +35,11 @@ public:
 
     /**
      * @brief Remove a child.
-     * The child will be removed with std::erase by checking raw pointer.
+     * The child will be removed with std::erase by checking timestep.
      *
      * @param child the child to add with meta data "timestep".
      */
-    void removeChild(vsg::ref_ptr<vsg::Node> child);
+    void removeChild(int step);
 
     /**
      * @brief Traverse the switch and enable all children for the current timestep.
@@ -45,8 +49,10 @@ public:
     bool traverseTime();
 
 private:
-    int m_blocksPerTimestep;
-    int m_numTimesteps;
+    /**
+     * @brief Enable all childs for current timestep and disable all others.
+     */
+    void enableTimestepChilds();
     int m_stepWith;
     int m_currentTimestep;
 

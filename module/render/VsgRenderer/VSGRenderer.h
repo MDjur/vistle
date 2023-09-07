@@ -19,8 +19,6 @@ public:
     ~VSGRenderer() override;
 
 private:
-    /* bool compute() override; */
-    /* bool compute(const std::shared_ptr<vistle::BlockTask> &task) const override; */
     /** 
      * @copydoc bool render()  
      */
@@ -78,11 +76,6 @@ private:
     vsg::ref_ptr<vsg::Viewer> m_viewer;
     vsg::ref_ptr<vsg::StateGroup> m_scenegraph;
     vsg::ref_ptr<vsg::MatrixTransform> m_transform;
-
-    int m_numBlocks = 0;
-    int m_numAnimationsSteps = 0;
-    int m_numTotalTimesteps = 0;
-    bool m_firstComputeCall = true;
 };
 
 #endif

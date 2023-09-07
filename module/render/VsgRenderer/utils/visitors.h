@@ -52,7 +52,7 @@ public:
         vsg::ref_ptr<TimestepSwitch> ts_ptr = timestepSwitch;
         if (!ts_ptr.valid())
             return;
-        //ts_ptr->accept(*this);
+        ts_ptr->accept(*this);
         time = std::chrono::duration<double, std::chrono::seconds::period>(frame.time - start).count();
         if (time > animationStep) {
             ts_ptr->traverseTime();
