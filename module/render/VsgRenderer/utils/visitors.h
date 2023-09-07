@@ -34,13 +34,15 @@ struct SetPipelineStates: public vsg::Inherit<vsg::Visitor, SetPipelineStates> {
  */
 class AnimateTimestepSwitch: public vsg::Inherit<vsg::Visitor, AnimateTimestepSwitch> {
 public:
-    AnimateTimestepSwitch(vsg::ref_ptr<TimestepSwitch> in_timestepSwitch, vsg::clock::time_point in_start)
-    : timestepSwitch(in_timestepSwitch), start(in_start)
+    AnimateTimestepSwitch(vsg::ref_ptr<TimestepSwitch> in_timestepSwitch, vsg::clock::time_point in_start,
+                          int in_animationStep = 1)
+    : timestepSwitch(in_timestepSwitch), start(in_start), time(0.0), animationStep(in_animationStep)
     {}
 
     vsg::observer_ptr<TimestepSwitch> timestepSwitch;
     vsg::clock::time_point start;
-    double time = 0.0;
+    double time;
+    int animationStep;
 
     /**
      * @copydoc void apply(vsg::FrameEvent &frame)
@@ -52,7 +54,7 @@ public:
             return;
         //ts_ptr->accept(*this);
         time = std::chrono::duration<double, std::chrono::seconds::period>(frame.time - start).count();
-        if (time > ts_ptr->getStepWith()) {
+        if (time > animationStep) {
             ts_ptr->traverseTime();
             start = frame.time;
         }
