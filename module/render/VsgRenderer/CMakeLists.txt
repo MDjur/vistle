@@ -1,9 +1,10 @@
 vistle_find_package(vsg)
 vistle_find_package(vsgXchange)
 
+set(utils_source utils/TimestepSwitch.cpp)
 set(utils_header utils/TimestepSwitch.h utils/visitors.h utils/operations.h)
 
-set(SOURCE VSGRenderer.cpp VSGRenderObject.cpp VSGTimestepHandler.cpp)
+set(SOURCE VSGRenderer.cpp VSGRenderObject.cpp VSGTimestepHandler.cpp ${utils_source})
 
 set(HEADERS VSGRenderer.h VSGRenderObject.h VSGTimestepHandler.h ${utils_header})
 
