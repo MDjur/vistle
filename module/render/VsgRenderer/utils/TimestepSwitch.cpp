@@ -6,7 +6,6 @@ void TimestepSwitch::addChild(vsg::ref_ptr<vsg::Node> child)
     int timestep;
     if (child->getValue("timestep", timestep)) {
         children.insert(children.begin() + timestep + currentBlock, Child{vsg::boolToMask(false), child});
-        // as long as timestep stays the same increment block counter
         if (timestep != m_currentTimestep) {
             ++m_numTimesteps;
             m_currentTimestep = timestep;
@@ -14,6 +13,7 @@ void TimestepSwitch::addChild(vsg::ref_ptr<vsg::Node> child)
                 m_blocksPerTimestep = currentBlock;
             currentBlock = -1;
         }
+        // as long as timestep stays the same increment block counter
         ++currentBlock;
     }
 }
