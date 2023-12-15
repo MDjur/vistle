@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <set>
+#include <atomic>
 
 #include <boost/asio.hpp>
 #include <boost/mpi.hpp>
@@ -11,6 +12,8 @@
 #include <vistle/core/messagepayload.h>
 #include <vistle/core/availablemodule.h>
 
+#include "export.h"
+
 namespace vistle {
 
 class Parameter;
@@ -18,7 +21,7 @@ class ClusterManager;
 class DataManager;
 class Module;
 
-class Communicator {
+class V_MANAGEREXPORT Communicator {
     friend class ClusterManager;
     friend class DataManager;
 
@@ -36,6 +39,7 @@ public:
     void setVistleRoot(const std::string &dir, const std::string &buildtype);
     void run();
     bool dispatch(bool *work);
+    void terminate();
     bool handleMessage(const message::Buffer &message, const MessagePayload &payload = MessagePayload());
     bool forwardToMaster(const message::Message &message, const vistle::MessagePayload &payload = MessagePayload());
     bool broadcastAndHandleMessage(const message::Message &message, const MessagePayload &payload = MessagePayload());
@@ -45,8 +49,6 @@ public:
     int hubId() const;
     int getRank() const;
     int getSize() const;
-
-    unsigned short uiPort() const;
 
     ClusterManager &clusterManager() const;
     DataManager &dataManager() const;
@@ -64,6 +66,7 @@ private:
     boost::mpi::communicator m_comm;
     ClusterManager *m_clusterManager;
     DataManager *m_dataManager;
+    std::atomic<bool> m_terminate = false;
 
     std::recursive_mutex m_mutex;
     bool isMaster() const;
