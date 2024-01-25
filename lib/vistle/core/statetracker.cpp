@@ -206,9 +206,12 @@ std::string StateTracker::getModuleName(int id) const
 {
     mutex_locker guard(m_stateMutex);
     RunningMap::const_iterator it = runningMap.find(id);
-    if (it == runningMap.end())
-        return std::string();
-    return it->second.name;
+    if (it != runningMap.end())
+        return it->second.name;
+    it = quitMap.find(id);
+    if (it != quitMap.end())
+        return it->second.name;
+    return std::string();
 }
 
 std::string StateTracker::getModuleDescription(int id) const
@@ -418,6 +421,7 @@ StateTracker::VistleState StateTracker::getState() const
         msg.setHasUserInterface(slave.hasUi);
         msg.setSystemType(slave.systemType);
         msg.setArch(slave.arch);
+        msg.setInfo(slave.info);
         appendMessage(state, msg);
     }
 
@@ -895,6 +899,7 @@ bool StateTracker::handlePriv(const message::AddHub &slave)
     m_hubs.back().hasUi = slave.hasUserInterface();
     m_hubs.back().systemType = slave.systemType();
     m_hubs.back().arch = slave.arch();
+    m_hubs.back().info = slave.info();
 
     // for per-hub parameters
     Module hub(slave.id(), slave.id());

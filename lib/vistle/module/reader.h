@@ -103,7 +103,7 @@ public:
 
 protected:
     Parameter *addParameterGeneric(const std::string &name, std::shared_ptr<Parameter> parameter) override;
-    bool removeParameter(Parameter *param) override;
+    bool removeParameter(const std::string &name) override;
 
     enum ParallelizationMode {
         Serial, ///< only one operation at a time, all blocks of a timestep first, then other timesteps
@@ -160,15 +160,11 @@ protected:
     bool changeParameter(const Parameter *param) override;
     void prepareQuit() override;
 
-
-    bool checkConvexity() const;
-
     IntParameter *m_first = nullptr;
     IntParameter *m_last = nullptr;
     IntParameter *m_increment = nullptr;
     IntParameter *m_distributeTime = nullptr;
     IntParameter *m_firstRank = nullptr;
-    IntParameter *m_checkConvexity = nullptr;
 
 private:
     struct ReaderProperties {

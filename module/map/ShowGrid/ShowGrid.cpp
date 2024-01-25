@@ -27,8 +27,6 @@ ShowGrid::ShowGrid(const std::string &name, int moduleID, mpi::communicator comm
 
     addIntParameter("normalcells", "Show normal (non ghost) cells", 1, Parameter::Boolean);
     addIntParameter("ghostcells", "Show ghost cells", 0, Parameter::Boolean);
-    addIntParameter("convex", "Show convex cells", 1, Parameter::Boolean);
-    addIntParameter("nonconvex", "Show non-convex cells", 1, Parameter::Boolean);
 
     addIntParameter("tetrahedron", "Show tetrahedron", 1, Parameter::Boolean);
     addIntParameter("pyramid", "Show pyramid", 1, Parameter::Boolean);
@@ -62,9 +60,6 @@ bool ShowGrid::compute()
     showTypes[UnstructuredGrid::POINT] = showTypes[UnstructuredGrid::POLYHEDRON] = getIntParameter("polyhedron");
     const bool shownor = getIntParameter("normalcells");
     const bool showgho = getIntParameter("ghostcells");
-    const bool showconv = getIntParameter("convex");
-    const bool shownonconv = getIntParameter("nonconvex");
-
 
     const Integer cellnrmin = m_CellNrMin->getValue();
     const Integer cellnrmax = m_CellNrMax->getValue();
@@ -95,14 +90,11 @@ bool ShowGrid::compute()
 
             for (Index index = begin; index < end; ++index) {
                 auto type = unstr->tl()[index];
-                const bool ghost = type & UnstructuredGrid::GHOST_BIT;
-                const bool conv = type & UnstructuredGrid::CONVEX_BIT;
+                const bool ghost = unstr->isGhost(index);
 
-                const bool show =
-                    ((showgho && ghost) || (shownor && !ghost)) && ((showconv && conv) || (shownonconv && !conv));
+                const bool show = ((showgho && ghost) || (shownor && !ghost));
                 if (!show)
                     continue;
-                type &= vistle::UnstructuredGrid::TYPE_MASK;
                 if (!showTypes[type])
                     continue;
 

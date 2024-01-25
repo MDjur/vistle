@@ -217,12 +217,24 @@ double getRealTime(Object::const_ptr obj)
 bool Module::setup(const std::string &shmname, int moduleID, const std::string &cluster, int rank)
 {
 #ifndef MODULE_THREAD
-    bool perRank = shmPerRank();
-    Shm::attach(shmname, moduleID, rank, perRank);
-    vistle::apply_affinity_from_environment(Shm::the().nodeRank(rank), Shm::the().numRanksOnThisNode());
-    setenv("VISTLE_CLUSTER", cluster.c_str(), 1);
+    if (!Shm::isAttached()) {
+        bool perRank = shmPerRank();
+        Shm::attach(shmname, moduleID, rank, perRank);
+        vistle::apply_affinity_from_environment(Shm::the().nodeRank(rank), Shm::the().numRanksOnThisNode());
+        setenv("VISTLE_CLUSTER", cluster.c_str(), 1);
+    }
 #endif
     return Shm::isAttached();
+}
+
+bool Module::cleanup(bool dedicated_process)
+{
+#ifndef MODULE_THREAD
+    if (dedicated_process) {
+        Shm::the().detach();
+    }
+#endif
+    return true;
 }
 
 Module::Module(const std::string &moduleName, const int moduleId, mpi::communicator comm)
@@ -631,16 +643,15 @@ Parameter *Module::addParameterGeneric(const std::string &name, std::shared_ptr<
     return ParameterManager::addParameterGeneric(name, param);
 }
 
-bool Module::removeParameter(Parameter *param)
+bool Module::removeParameter(const std::string &name)
 {
-    std::string name = param->getName();
     assert(havePort(name));
     if (!havePort(name)) {
         CERR << "removeParameter: no port with name " << name << std::endl;
         return false;
     }
 
-    return ParameterManager::removeParameter(param);
+    return ParameterManager::removeParameter(name);
 }
 
 bool Module::sendObject(const mpi::communicator &comm, Object::const_ptr obj, int destRank) const
@@ -1073,6 +1084,12 @@ Object::const_ptr Module::expect<Object>(Port *port)
         sendError(str.str());
         return nullptr;
     }
+    if (!isConnected(*port)) {
+        std::stringstream str;
+        str << "port " << port->getName() << " is not connected" << std::endl;
+        sendError(str.str());
+        return nullptr;
+    }
     if (port->objects().empty()) {
         if (schedulingPolicy() == message::SchedulingPolicy::Single) {
             std::stringstream str;
@@ -1256,11 +1273,11 @@ bool Module::getNextMessage(message::Buffer &buf, bool block, unsigned int minPr
             if (!messageBacklog.empty()) {
                 auto &front = messageBacklog.front();
                 if (buf.priority() <= front.priority()) {
-                    // keep bufferd messages sorted according to priority
+                    // keep buffered messages sorted according to priority
                     std::swap(buf, front);
                     auto it = messageBacklog.begin(), next = it + 1;
                     while (next != messageBacklog.end()) {
-                        if (it->priority() >= next->priority())
+                        if (it->priority() <= next->priority())
                             std::swap(*it, *next);
                         it = next;
                         ++next;
@@ -1274,8 +1291,9 @@ bool Module::getNextMessage(message::Buffer &buf, bool block, unsigned int minPr
 
             messageBacklog.push_front(buf);
         } else if (!messageBacklog.empty()) {
-            buf = messageBacklog.front();
-            if (buf.priority() >= minPrio) {
+            const auto &front = messageBacklog.front();
+            if (front.priority() >= minPrio) {
+                buf = front;
                 messageBacklog.pop_front();
                 return true;
             }
@@ -1371,6 +1389,15 @@ bool Module::dispatch(bool block, bool *messageReceived, unsigned int minPrio)
         // if parent died something is wrong - make sure that shm get cleaned up
         Shm::the().setRemoveOnDetach();
         throw(e);
+    } catch (vistle::exception &e) {
+        std::cerr << "Vistle exception in module " << name() << ": " << e.what() << e.where() << std::endl;
+        throw(e);
+    } catch (std::exception &e) {
+        std::cerr << "exception in module " << name() << ": " << e.what() << std::endl;
+        throw(e);
+    } catch (...) {
+        std::cerr << "unknown exception in module " << name() << std::endl;
+        throw;
     }
 
     return again;
@@ -2305,10 +2332,6 @@ Module::~Module()
     sendMessageQueue = nullptr;
     delete receiveMessageQueue;
     receiveMessageQueue = nullptr;
-
-#ifndef MODULE_THREAD
-    Shm::the().detach();
-#endif
 
     if (m_origStreambuf)
         std::cerr.rdbuf(m_origStreambuf);

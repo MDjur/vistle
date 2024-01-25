@@ -18,9 +18,6 @@ Reader::Reader(const std::string &name, const int moduleID, mpi::communicator co
     m_firstRank = addIntParameter("first_rank", "rank for first partition of first timestep", 0);
     setParameterRange(m_firstRank, Integer(0), Integer(comm.size() - 1));
 
-    m_checkConvexity =
-        addIntParameter("check_convexity", "whether to check convexity of grid cells", 0, Parameter::Boolean);
-
     setCurrentParameterGroup();
 
     assert(m_concurrency);
@@ -43,22 +40,17 @@ Parameter *Reader::addParameterGeneric(const std::string &name, std::shared_ptr<
     return Module::addParameterGeneric(name, parameter);
 }
 
-bool Reader::removeParameter(Parameter *param)
+bool Reader::removeParameter(const std::string &name)
 {
-    if (param == m_firstFileBrowser.get())
+    if (m_firstFileBrowser && m_firstFileBrowser->getName() == m_firstFileBrowser->getName())
         m_firstFileBrowser.reset();
-    return Module::removeParameter(param);
+    return Module::removeParameter(name);
 }
 
 void Reader::prepareQuit()
 {
     m_observedParameters.clear();
     Module::prepareQuit();
-}
-
-bool Reader::checkConvexity() const
-{
-    return m_checkConvexity->getValue();
 }
 
 int Reader::rankForTimestepAndPartition(int t, int p) const
@@ -375,7 +367,7 @@ void Reader::setAllowTimestepDistribution(bool allow)
         }
     } else {
         if (m_distributeTime)
-            removeParameter(m_distributeTime);
+            removeParameter(m_distributeTime->getName());
         m_distributeTime = nullptr;
     }
 }
