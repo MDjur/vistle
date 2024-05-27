@@ -5,6 +5,7 @@
 #include <algorithm>
 #include "cellalgorithm.h"
 #include <set>
+#include "validate.h"
 
 //#define INTERPOL_DEBUG
 //#define INSIDE_DEBUG
@@ -38,20 +39,27 @@ bool UnstructuredGrid::isEmpty() const
     return Base::isEmpty();
 }
 
-bool UnstructuredGrid::checkImpl() const
+bool UnstructuredGrid::checkImpl(std::ostream &os, bool quick) const
 {
-    CHECK_OVERFLOW(d()->tl->size());
+    VALIDATE_INDEX(d()->tl->size());
 
-    V_CHECK(d()->tl->check());
-    V_CHECK(d()->tl->size() == getNumElements());
+    VALIDATE(d()->tl->check(os));
+    VALIDATE(d()->tl->size() == getNumElements());
+
+    if (quick)
+        return true;
+
+    VALIDATE_RANGE_P(d()->tl, 0, cell::NUM_TYPES - 1);
 
     return true;
 }
 
-void UnstructuredGrid::print(std::ostream &os) const
+void UnstructuredGrid::print(std::ostream &os, bool verbose) const
 {
-    Base::print(os);
-    os << " tl(" << *d()->tl << ")";
+    Base::print(os, verbose);
+    os << " tl(";
+    d()->tl->print(os, verbose);
+    os << ")";
 }
 
 bool UnstructuredGrid::isGhostCell(const Index elem) const
@@ -466,7 +474,6 @@ GridInterface::Interpolator UnstructuredGrid::getInterpolator(Index elem, const 
 #endif
 
             std::vector<Vector3> coord(nvert);
-            Index nfaces = 0;
             Index n = 0;
             Index facestart = InvalidIndex;
             Index term = 0;
@@ -476,7 +483,6 @@ GridInterface::Interpolator UnstructuredGrid::getInterpolator(Index elem, const 
                     term = cl[i];
                 } else if (cl[i] == term) {
                     const Index N = i - facestart;
-                    ++nfaces;
                     for (Index k = facestart; k < facestart + N; ++k) {
                         indices[n] = cl[k];
                         for (int c = 0; c < 3; ++c) {

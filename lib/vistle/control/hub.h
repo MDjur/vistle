@@ -116,6 +116,7 @@ private:
     void cachePortConnections(int oldModuleId, int newModuleId);
     void cacheParamConnections(int oldModuleId, int newModuleId);
     bool cacheModuleValues(int oldModuleId, int newModuleId);
+    bool editDelayedConnects(int oldModuleId, int newModuleId);
     void applyAllDelayedParameters(int oldModuleId, int newModuleId);
     bool copyModuleParams(int oldModuleId, int newModuleId);
     void cacheParameters(int oldModuleId, int newModuleId);
@@ -193,8 +194,6 @@ private:
     int m_moduleCount;
     message::Type m_traceMessages;
 
-    int m_execCount;
-
     bool m_barrierActive;
     unsigned m_barrierReached;
     message::uuid_t m_barrierUuid;
@@ -228,8 +227,11 @@ private:
     const AvailableModule *findModule(const AvailableModule::Key &key);
     void spawnModule(const std::string &path, const std::string &name, int spawnId);
     bool spawnMirror(int hubId, const std::string &name, int mirroredId);
+    std::mutex m_queueMutex; // protect access to m_queue
     std::vector<message::Buffer> m_queue;
     bool handleQueue();
+    bool updateQueue(int oldId, int newId);
+    bool cleanQueue(int exitedId);
 
     void setLoadedFile(const std::string &file);
     void setSessionUrl(const std::string &url);

@@ -1,7 +1,7 @@
 if(WIN32)
     cmake_minimum_required(VERSION 3.15.2 FATAL_ERROR)
 else(WIN32)
-    cmake_minimum_required(VERSION 3.10.0 FATAL_ERROR)
+    cmake_minimum_required(VERSION 3.12.0 FATAL_ERROR)
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
@@ -49,6 +49,10 @@ if(POLICY CMP0074)
     # make find_include/find_library search in <PackageName>_ROOT prefix
     cmake_policy(SET CMP0074 NEW)
 endif()
+if(POLICY CMP0144)
+    # make find_include/find_library search in uppercased <PackageName>_ROOT prefix
+    cmake_policy(SET CMP0144 NEW)
+endif()
 
 # vim's YouCompleteMe can make use of this
 set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
@@ -73,10 +77,19 @@ option(VISTLE_SANITIZE_ADDRESS "Build with -fsanitize=address" OFF)
 option(VISTLE_SANITIZE_THREAD "Build with -fsanitize=thread" OFF)
 option(VISTLE_TIME_BUILD "Gather build times (Clang/ISPC)" OFF)
 
+option(VISTLE_PROFILE_NVTX "Annotate for Nsight profiler" OFF)
+option(VISTLE_PROFILE_CHROME "Annotate for showing timings in Chrome browser" OFF)
+
 option(VISTLE_ENABLE_CUDA "Build with CUDA support" OFF)
 option(VISTLE_ENABLE_KOKKOS "Build with Kokkos support" OFF)
 
-option(VISTLE_USE_QT5 "Build GUI with Qt5 instead of Qt6" ON)
+if(APPLE)
+    option(VISTLE_USE_QT5 "Build GUI with Qt5 instead of Qt6" OFF)
+elseif(WIN32)
+    option(VISTLE_USE_QT5 "Build GUI with Qt5 instead of Qt6" OFF)
+else()
+    option(VISTLE_USE_QT5 "Build GUI with Qt5 instead of Qt6" ON)
+endif()
 option(VISTLE_USE_MPI "Build with MPI instead of dummy MPI library" ON)
 
 option(VISTLE_COLOR_DIAGNOSTICS "Produce ANSI-colored build output (GNU/Clang)" ON)
@@ -265,6 +278,75 @@ if(WIN32)
 endif(WIN32)
 
 set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake/Modules/;${CMAKE_MODULE_PATH}")
+
+# figure out version
+vistle_find_package(Git)
+
+set(VISTLE_VERSION_TAG "unknown")
+set(VISTLE_VERSION_HASH "unknown")
+if(GIT_FOUND)
+    # for hash
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} log -n1 --format=%h/%ci
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        OUTPUT_VARIABLE GIT_LOG_OUT
+        ERROR_VARIABLE GIT_LOG_ERROR
+        RESULT_VARIABLE GIT_LOG_RESULT
+        OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+    # for latest tag contained by hash
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} tag --sort=v:refname --merged
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        OUTPUT_VARIABLE GIT_TAG_OUT
+        ERROR_VARIABLE GIT_TAG_ERROR
+        RESULT_VARIABLE GIT_TAG_RESULT
+        OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+    # working copy clean/dirty?
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} status --untracked-files=no --porcelain
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        OUTPUT_VARIABLE GIT_STATUS_OUT
+        ERROR_VARIABLE GIT_STATUS_ERROR
+        RESULT_VARIABLE GIT_STATUS_RESULT
+        OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+    if(${GIT_LOG_RESULT} EQUAL 0
+       AND ${GIT_TAG_RESULT} EQUAL 0
+       AND ${GIT_STATUS_RESULT} EQUAL 0)
+        string(REGEX REPLACE "^([a-z0-9]*)/(....)-(..)-(..).*" "\\1" VISTLE_VERSION_HASH "${GIT_LOG_OUT}")
+        if(NOT "" STREQUAL "${GIT_STATUS_OUT}")
+            # append + to hash, if dirty
+            set(VISTLE_VERSION_HASH "${VISTLE_VERSION_HASH}+")
+        endif()
+
+        set(VISTLE_VERSION_TAG "${GIT_TAG_OUT}")
+        # ensure that every tag is surrounded by \n
+        string(PREPEND VISTLE_VERSION_TAG "\n")
+        string(APPEND VISTLE_VERSION_TAG "\n")
+
+        # throw out everything that does not start with v20
+        string(REGEX REPLACE "\n([^v]|.[^2]|..[^0])[^\n]*" "\n" VISTLE_VERSION_TAG "${VISTLE_VERSION_TAG}")
+        # remove empty lines
+        string(REGEX REPLACE "\n+" "\n" VISTLE_VERSION_TAG "${VISTLE_VERSION_TAG}")
+        # remove final \n
+        string(REGEX REPLACE "\n$" "" VISTLE_VERSION_TAG "${VISTLE_VERSION_TAG}")
+        # remove everything up to and including last \n
+        string(REGEX REPLACE "^.*\n" "" VISTLE_VERSION_TAG "${VISTLE_VERSION_TAG}")
+        # chop off leading v
+        string(REGEX REPLACE "^v" "" VISTLE_VERSION_TAG "${VISTLE_VERSION_TAG}")
+        #message("VISTLE_VERSION_TAG: ${VISTLE_VERSION_TAG}")
+    else()
+        if(NOT ${GIT_LOG_RESULT} EQUAL 0)
+            message("Command \"${GIT_EXECUTABLE} log -n1 --format=%H/%ci ${dir}\" failed with output:\n${GIT_LOG_ERROR}")
+        endif()
+        if(NOT ${GIT_TAG_RESULT} EQUAL 0)
+            message("Command \"${GIT_EXECUTABLE} tag --merged ${dir}\" failed with output:\n${GIT_TAG_ERROR}")
+        endif()
+    endif()
+endif()
+message("VISTLE_VERSION: ${VISTLE_VERSION_TAG}-${VISTLE_VERSION_HASH}")
 
 include(ConfigureLinker)
 
@@ -971,18 +1053,22 @@ add_definitions(-DPYBIND11_DETAILED_ERROR_MESSAGES)
 # replacement for Boost.Serialization
 # include_directories(SYSTEM "${PROJECT_SOURCE_DIR}/lib/3rdparty/yas/include")
 
-# lossy floating point compression
-# vistle_find_package(ZFP)
-set(ZFP_INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/lib/3rdparty/zfp/include")
-set(ZFP_LIBRARIES zfp)
+option(VISTLE_INTERNAL_ZFP "Use own copy of zfp lossy floating point compressor" ON)
+if(VISTLE_INTERNAL_ZFP)
+    # lossy floating point compression
+    set(ZFP_INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/lib/3rdparty/zfp/include")
 
-if(OPENMP_FOUND)
-    set(ZFP_LIBRARIES ${ZFP_LIBRARIES} ${OpenMP_CXX_LIBRARIES})
+    set(ZFP_LIBRARIES zfp)
+    if(OPENMP_FOUND)
+        set(ZFP_LIBRARIES ${ZFP_LIBRARIES} ${OpenMP_CXX_LIBRARIES})
+    endif()
+
+    set(ZFP_FOUND TRUE)
+    #add_definitions(-DHAVE_ZFP)
+    #include_directories(SYSTEM "${ZFP_INCLUDE_DIRS}")
+else()
+    vistle_find_package(ZFP REQUIRED)
 endif()
-
-set(ZFP_FOUND TRUE)
-add_definitions(-DHAVE_ZFP)
-include_directories(SYSTEM "${ZFP_INCLUDE_DIRS}")
 
 vistle_find_package(PkgConfig)
 vistle_find_package(ZSTD)

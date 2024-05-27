@@ -276,13 +276,13 @@ bool COVER::parameterAdded(const int senderId, const std::string &name, const me
         plugin = plugin.substr(0, plugin.size() - 3);
     if (boost::algorithm::ends_with(plugin, "Vtkm"))
         plugin = plugin.substr(0, plugin.size() - 4);
-    if (plugin == "CutGeometry")
+    if (plugin == "CutGeometry" || plugin == "Clip")
         plugin = "CuttingSurface";
     if (plugin == "DisCOVERay" || plugin == "OsgRenderer" || plugin == "ANARemote")
         plugin = "RhrClient";
     if (plugin == "Color" || plugin == "ColorRandom")
         plugin = "ColorBars";
-    // std::cerr << "parameterAdded: sender=" <<  senderId << ", name=" << name << ", plugin=" << plugin << std::endl;
+    //std::cerr << "parameterAdded: sender=" << senderId << ", name=" << name << ", plugin=" << plugin << std::endl;
 
     InteractorMap::iterator it = m_interactorMap.find(senderId);
     if (it == m_interactorMap.end()) {
@@ -532,9 +532,7 @@ std::shared_ptr<vistle::RenderObject> COVER::addObject(int senderId, const std::
         cover->addPlugin("Volume");
     } else if (!VistleGeometryGenerator::isSupported(objType)) {
         std::stringstream str;
-        if (objType == vistle::Object::TUBES) {
-            str << "Tubes input unsupported - use ToTriangle module";
-        } else if (objType != vistle::Object::EMPTY) {
+        if (objType != vistle::Object::EMPTY) {
             str << "Unsupported input data: " << Object::toString(objType);
         }
         std::cerr << "COVER::addObject: " << str.str() << std::endl;
@@ -680,8 +678,8 @@ bool COVER::addColorMap(const std::string &species, Object::const_ptr colormap)
         cmap.setRange(texture->getMin(), texture->getMax());
 
         cmap.image->setPixelFormat(GL_RGBA);
-        cmap.image->setImage(texture->getWidth(), 1, 1, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, &texture->pixels()[0],
-                             osg::Image::NO_DELETE);
+        cmap.image->setImage(texture->getWidth(), 1, 1, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE,
+                             const_cast<unsigned char *>(&texture->pixels()[0]), osg::Image::NO_DELETE);
         cmap.image->dirty();
 
         cmap.setBlendWithMaterial(texture->hasAttribute("_blend_with_material"));
@@ -1018,7 +1016,7 @@ bool COVER::handleMessage(const message::Message *message, const MessagePayload 
     }
     case vistle::message::COVER: {
         auto &cmsg = message->as<const message::Cover>();
-        covise::DataHandle dh(payload->data(), payload->size(), false /* do not delete */);
+        covise::DataHandle dh(const_cast<char *>(payload->data()), payload->size(), false /* do not delete */);
         covise::Message msg(cmsg.subType(), dh);
         msg.sender = cmsg.sender();
         msg.send_type = cmsg.senderType();

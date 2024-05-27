@@ -9,13 +9,19 @@ void Ngons<N>::Data::serialize(Archive &ar)
 {
     ar &V_NAME(ar, "base_coords", serialize_base<Base::Data>(ar, *this));
     ar &V_NAME(ar, "connection_list", cl);
+    ar &V_NAME(ar, "ghost_list", ghost);
 }
 
 template<int N>
-void Ngons<N>::print(std::ostream &os) const
+void Ngons<N>::print(std::ostream &os, bool verbose) const
 {
-    Base::print(os);
-    os << " cl(" << *d()->cl << ")";
+    Base::print(os, verbose);
+    os << " cl(";
+    d()->cl->print(os, verbose);
+    os << ")";
+    os << " ghost(";
+    d()->ghost->print(os, verbose);
+    os << ")";
 }
 
 } // namespace vistle

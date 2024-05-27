@@ -18,7 +18,6 @@
 #include <vistle/util/math.h>
 #include <vistle/core/polygons.h>
 #include <vistle/core/points.h>
-#include <vistle/core/spheres.h>
 #include <vistle/core/lines.h>
 #include <vistle/core/triangles.h>
 #include <vistle/core/quads.h>
@@ -26,6 +25,7 @@
 #include <vistle/core/placeholder.h>
 #include <vistle/core/normals.h>
 #include <vistle/core/layergrid.h>
+#include <vistle/core/celltypes.h>
 
 #ifdef COVER_PLUGIN
 #include <cover/RenderObject.h>
@@ -34,9 +34,9 @@
 #include <cover/coVRPluginSupport.h>
 #include <PluginUtil/coSphere.h>
 #include <PluginUtil/Tipsify.h>
-#endif
 
 //#define BUILD_KDTREES
+#endif
 
 using namespace vistle;
 
@@ -54,8 +54,10 @@ const int DataAttrib = 10;
 std::mutex VistleGeometryGenerator::s_coverMutex;
 
 namespace {
+#ifdef BUILD_KDTREES
 std::mutex kdTreeMutex;
 std::vector<osg::ref_ptr<osg::KdTreeBuilder>> kdTreeBuilders;
+#endif
 
 std::map<std::string, std::string> get_shader_parameters()
 {
@@ -263,9 +265,6 @@ bool VistleGeometryGenerator::isSupported(vistle::Object::Type t)
     case vistle::Object::QUADS:
     case vistle::Object::POLYGONS:
     case vistle::Object::LAYERGRID:
-#ifdef COVER_PLUGIN
-    case vistle::Object::SPHERES:
-#endif
         return true;
 
     default:
@@ -522,7 +521,7 @@ osg::Vec3Array *computeNormals(typename Geometry::const_ptr geometry, bool index
     return normals;
 }
 
-osg::PrimitiveSet *buildTrianglesFromTriangles(const PrimitiveBin &bin, bool indexGeom)
+osg::PrimitiveSet *buildTrianglesFromTriangles(const PrimitiveBin &bin, bool indexGeom, const Byte *ghost)
 {
     Index numTri = bin.prim.size();
     Index numCorners = bin.ncl.size();
@@ -530,12 +529,29 @@ osg::PrimitiveSet *buildTrianglesFromTriangles(const PrimitiveBin &bin, bool ind
         const Index *cl = bin.ncl.data();
         auto corners = new osg::DrawElementsUInt(osg::PrimitiveSet::TRIANGLES, 0);
         corners->reserve(numTri * 3);
-        for (Index corner = 0; corner < numCorners; corner++)
+        for (Index corner = 0; corner < numCorners; corner++) {
+            Index el = corner / 3;
+            if (ghost && ghost[el] == cell::GHOST)
+                continue;
             corners->push_back(cl[corner]);
+        }
 #ifdef COVER_PLUGIN
         opencover::tipsify(&(*corners)[0], corners->size());
 #endif
-        assert(corners->size() == numTri * 3);
+        assert(ghost || corners->size() == numTri * 3);
+        return corners;
+    } else if (ghost) {
+        auto corners = new osg::DrawElementsUInt(osg::PrimitiveSet::TRIANGLES, 0);
+        corners->reserve(numTri * 3);
+        for (Index corner = 0; corner < numTri * 3; corner++) {
+            Index el = corner / 3;
+            if (ghost && ghost[el] == cell::GHOST)
+                continue;
+            corners->push_back(corner);
+        }
+#ifdef COVER_PLUGIN
+        opencover::tipsify(&(*corners)[0], corners->size());
+#endif
         return corners;
     } else {
         return new osg::DrawArrays(osg::PrimitiveSet::TRIANGLES, 0, bin.ntri * 3);
@@ -544,7 +560,7 @@ osg::PrimitiveSet *buildTrianglesFromTriangles(const PrimitiveBin &bin, bool ind
     return nullptr;
 }
 
-osg::PrimitiveSet *buildTrianglesFromQuads(const PrimitiveBin &bin, bool indexGeom)
+osg::PrimitiveSet *buildTrianglesFromQuads(const PrimitiveBin &bin, bool indexGeom, const Byte *ghost)
 {
     Index numTri = bin.prim.size() * 2;
     Index numCorners = bin.ncl.size();
@@ -552,12 +568,26 @@ osg::PrimitiveSet *buildTrianglesFromQuads(const PrimitiveBin &bin, bool indexGe
         const Index *cl = bin.ncl.data();
         auto corners = new osg::DrawElementsUInt(osg::PrimitiveSet::TRIANGLES, 0);
         corners->reserve(numTri * 3);
-        for (Index corner = 0; corner < numCorners; corner++)
+        for (Index corner = 0; corner < numCorners; corner++) {
+            Index el = corner / 6;
+            if (ghost && ghost[el] == cell::GHOST)
+                continue;
             corners->push_back(cl[corner]);
+        }
 #ifdef COVER_PLUGIN
         opencover::tipsify(&(*corners)[0], corners->size());
 #endif
-        assert(corners->size() == numTri * 3);
+        assert(ghost || corners->size() == numTri * 3);
+        return corners;
+    } else if (ghost) {
+        auto corners = new osg::DrawElementsUInt(osg::PrimitiveSet::TRIANGLES, 0);
+        corners->reserve(numTri * 3);
+        for (Index corner = 0; corner < numTri * 3; corner++) {
+            Index el = corner / 6;
+            if (ghost && ghost[el] == cell::GHOST)
+                continue;
+            corners->push_back(corner);
+        }
         return corners;
     } else {
         return new osg::DrawArrays(osg::PrimitiveSet::TRIANGLES, 0, bin.ntri * 3);
@@ -566,7 +596,7 @@ osg::PrimitiveSet *buildTrianglesFromQuads(const PrimitiveBin &bin, bool indexGe
     return nullptr;
 }
 
-osg::PrimitiveSet *buildTriangles(const PrimitiveBin &bin, const Index *el, bool indexGeom)
+osg::PrimitiveSet *buildTriangles(const PrimitiveBin &bin, const Index *el, bool indexGeom, const Byte *ghost)
 {
     Index numElements = bin.prim.size();
     Index numCorners = bin.ncl.size();
@@ -578,11 +608,36 @@ osg::PrimitiveSet *buildTriangles(const PrimitiveBin &bin, const Index *el, bool
         Index begin = 0;
         Index idx = 0;
         for (auto elem: bin.prim) {
+            if (ghost && ghost[elem] == cell::GHOST)
+                continue;
             const Index num = el[elem + 1] - el[elem];
             const Index end = begin + num;
             for (Index i = begin; i < end - 2; ++i) {
                 for (int k = 0; k < 3; ++k)
                     corners->push_back(cl[idx++]);
+            }
+            begin = end;
+        }
+#ifdef COVER_PLUGIN
+        opencover::tipsify(&(*corners)[0], corners->size());
+#endif
+        return corners;
+    } else if (ghost) {
+        auto corners = new osg::DrawElementsUInt(osg::PrimitiveSet::TRIANGLES, 0);
+        corners->reserve(numTri * 3);
+        Index begin = 0;
+        Index idx = 0;
+        for (auto elem: bin.prim) {
+            const Index num = el[elem + 1] - el[elem];
+            const Index end = begin + num;
+            if (ghost && ghost[elem] == cell::GHOST) {
+                idx += 3 * (end - begin - 2);
+                continue;
+            } else {
+                for (Index i = begin; i < end - 2; ++i) {
+                    for (int k = 0; k < 3; ++k)
+                        corners->push_back(idx++);
+                }
             }
             begin = end;
         }
@@ -804,6 +859,7 @@ osg::Geode *VistleGeometryGenerator::operator()(osg::ref_ptr<osg::StateSet> defa
         auto np = m_geo->getAttribute("_bin_num_primitives");
         numPrimitives = atol(np.c_str());
     }
+    vistle::Points::const_ptr points = vistle::Points::as(m_geo);
 
     osg::Material *mat = nullptr;
     if (m_ro && m_ro->hasSolidColor) {
@@ -898,6 +954,7 @@ osg::Geode *VistleGeometryGenerator::operator()(osg::ref_ptr<osg::StateSet> defa
             debug << "cached ";
     }
 
+    const Byte *ghost = nullptr;
     switch (m_geo->getType()) {
     case vistle::Object::PLACEHOLDER: {
         vistle::PlaceHolder::const_ptr ph = vistle::PlaceHolder::as(m_geo);
@@ -912,38 +969,55 @@ osg::Geode *VistleGeometryGenerator::operator()(osg::ref_ptr<osg::StateSet> defa
     case vistle::Object::POINTS: {
         indexGeom = false;
 
-        vistle::Points::const_ptr points = vistle::Points::as(m_geo);
+        assert(points);
         const Index numVertices = points->getNumPoints();
 
-        debug << "Points: [ #v " << numVertices << " ]";
+        auto radius = points->radius();
 
-        auto geom = new osg::Geometry();
-        draw.push_back(geom);
+        debug << "Points: [ #v " << numVertices << (radius ? " with radius" : "") << " ]";
+        const vistle::Scalar *x = &points->x()[0];
+        const vistle::Scalar *y = &points->y()[0];
+        const vistle::Scalar *z = &points->z()[0];
 
-        if (numVertices > 0) {
-            if (cached) {
-                std::unique_lock<GeometryCache> guard(cache);
-                geom->setVertexArray(cache.vertices.front());
-                geom->addPrimitiveSet(cache.primitives.front());
-            } else {
-                const vistle::Scalar *x = &points->x()[0];
-                const vistle::Scalar *y = &points->y()[0];
-                const vistle::Scalar *z = &points->z()[0];
-                osg::ref_ptr<osg::Vec3Array> vertices = new osg::Vec3Array();
-                for (Index v = 0; v < numVertices; v++)
-                    vertices->push_back(osg::Vec3(x[v], y[v], z[v]));
+#ifdef COVER_PLUGIN
+        if (radius) {
+            indexGeom = false;
 
-                geom->setVertexArray(vertices.get());
-                auto ps = new osg::DrawArrays(osg::PrimitiveSet::POINTS, 0, numVertices);
-                geom->addPrimitiveSet(ps);
-                if (m_cache) {
-                    cache.vertices.push_back(vertices);
-                    cache.primitives.push_back(ps);
+            sphere = new opencover::coSphere();
+            draw.push_back(sphere);
+
+            const vistle::Scalar *r = &radius->x()[0];
+            sphere->setCoords(numVertices, x, y, z, r);
+
+            colormap = nullptr; // has to use its own shader
+        } else
+#endif
+        {
+            auto geom = new osg::Geometry();
+            draw.push_back(geom);
+
+            if (numVertices > 0) {
+                if (cached) {
+                    std::unique_lock<GeometryCache> guard(cache);
+                    geom->setVertexArray(cache.vertices.front());
+                    geom->addPrimitiveSet(cache.primitives.front());
+                } else {
+                    osg::ref_ptr<osg::Vec3Array> vertices = new osg::Vec3Array();
+                    for (Index v = 0; v < numVertices; v++)
+                        vertices->push_back(osg::Vec3(x[v], y[v], z[v]));
+
+                    geom->setVertexArray(vertices.get());
+                    auto ps = new osg::DrawArrays(osg::PrimitiveSet::POINTS, 0, numVertices);
+                    geom->addPrimitiveSet(ps);
+                    if (m_cache) {
+                        cache.vertices.push_back(vertices);
+                        cache.primitives.push_back(ps);
+                    }
                 }
-            }
 
-            state->setAttribute(new osg::Point(2.0f), osg::StateAttribute::ON);
-            lighted = false;
+                state->setAttribute(new osg::Point(2.0f), osg::StateAttribute::ON);
+                lighted = false;
+            }
         }
         break;
     }
@@ -1032,30 +1106,6 @@ osg::Geode *VistleGeometryGenerator::operator()(osg::ref_ptr<osg::StateSet> defa
     }
 #endif
 
-#ifdef COVER_PLUGIN
-    case vistle::Object::SPHERES: {
-        indexGeom = false;
-
-        vistle::Spheres::const_ptr spheres = vistle::Spheres::as(m_geo);
-        const Index numVertices = spheres->getNumSpheres();
-
-        debug << "Spheres: [ #v " << numVertices << " ]";
-
-        sphere = new opencover::coSphere();
-        draw.push_back(sphere);
-
-        const vistle::Scalar *x = &spheres->x()[0];
-        const vistle::Scalar *y = &spheres->y()[0];
-        const vistle::Scalar *z = &spheres->z()[0];
-        const vistle::Scalar *r = &spheres->r()[0];
-        sphere->setCoords(numVertices, x, y, z, r);
-
-        colormap = nullptr; // has to use its own shader
-
-        break;
-    }
-#endif
-
     case vistle::Object::TRIANGLES: {
         vistle::Triangles::const_ptr triangles = vistle::Triangles::as(m_geo);
 
@@ -1063,6 +1113,8 @@ osg::Geode *VistleGeometryGenerator::operator()(osg::ref_ptr<osg::StateSet> defa
         const Index numVertices = triangles->getNumVertices();
         if (numCorners == 0)
             indexGeom = false;
+        if (triangles->ghost().size() > 0)
+            ghost = triangles->ghost().data();
 
         debug << "Triangles: [ #c " << numCorners << ", #v " << numVertices << ", indexed=" << (indexGeom ? "t" : "f")
               << " ]";
@@ -1091,7 +1143,7 @@ osg::Geode *VistleGeometryGenerator::operator()(osg::ref_ptr<osg::StateSet> defa
                 geom->setVertexArray(vertices);
                 cache.vertices.push_back(vertices);
 
-                auto ps = buildTrianglesFromTriangles(bin, indexGeom);
+                auto ps = buildTrianglesFromTriangles(bin, indexGeom, ghost);
                 geom->addPrimitiveSet(ps);
                 cache.primitives.push_back(ps);
 
@@ -1138,6 +1190,8 @@ osg::Geode *VistleGeometryGenerator::operator()(osg::ref_ptr<osg::StateSet> defa
         const Index numVertices = quads->getNumVertices();
         if (numCorners == 0)
             indexGeom = false;
+        if (quads->ghost().size() > 0)
+            ghost = quads->ghost().data();
 
         debug << "Quads: [ #c " << numCorners << ", #v " << numVertices << ", indexed=" << (indexGeom ? "t" : "f")
               << " ]";
@@ -1165,7 +1219,7 @@ osg::Geode *VistleGeometryGenerator::operator()(osg::ref_ptr<osg::StateSet> defa
                 geom->setVertexArray(vertices);
                 cache.vertices.push_back(vertices);
 
-                auto ps = buildTrianglesFromQuads(bin, indexGeom);
+                auto ps = buildTrianglesFromQuads(bin, indexGeom, ghost);
                 geom->addPrimitiveSet(ps);
                 cache.primitives.push_back(ps);
 
@@ -1211,6 +1265,8 @@ osg::Geode *VistleGeometryGenerator::operator()(osg::ref_ptr<osg::StateSet> defa
         const Index numVertices = polygons->getNumVertices();
         if (numCorners == 0)
             indexGeom = false;
+        if (polygons->ghost().size() > 0)
+            ghost = polygons->ghost().data();
 
         debug << "Polygons: [ #c " << numCorners << ", #e " << numElements << ", #v " << numVertices
               << ", indexed=" << (indexGeom ? "t" : "f") << " ]";
@@ -1241,7 +1297,7 @@ osg::Geode *VistleGeometryGenerator::operator()(osg::ref_ptr<osg::StateSet> defa
                 geom->setVertexArray(vertices);
                 cache.vertices.push_back(vertices);
 
-                auto ps = buildTriangles(bin, el, indexGeom);
+                auto ps = buildTriangles(bin, el, indexGeom, ghost);
                 geom->addPrimitiveSet(ps);
                 cache.primitives.push_back(ps);
 
@@ -1389,7 +1445,6 @@ osg::Geode *VistleGeometryGenerator::operator()(osg::ref_ptr<osg::StateSet> defa
     vistle::Triangles::const_ptr triangles = vistle::Triangles::as(m_geo);
     vistle::Quads::const_ptr quads = vistle::Quads::as(m_geo);
     vistle::Polygons::const_ptr polygons = vistle::Polygons::as(m_geo);
-    vistle::Spheres::const_ptr spheres = vistle::Spheres::as(m_geo);
     vistle::LayerGrid::const_ptr lg = vistle::LayerGrid::as(m_geo);
 
     state->setMode(GL_CULL_FACE, osg::StateAttribute::OFF);
@@ -1463,9 +1518,9 @@ osg::Geode *VistleGeometryGenerator::operator()(osg::ref_ptr<osg::StateSet> defa
     }
 
 #ifdef COVER_PLUGIN
-    if (spheres && sphere && tex) {
+    if (points && sphere && tex) {
         if (mapping == vistle::DataBase::Vertex) {
-            const auto numCoords = spheres->getNumCoords();
+            const auto numCoords = points->getNumCoords();
             auto pix = tex->pixels().data();
             auto width = tex->getWidth();
             std::vector<float> rgba[4];
@@ -1508,8 +1563,8 @@ osg::Geode *VistleGeometryGenerator::operator()(osg::ref_ptr<osg::StateSet> defa
 
                 osg::ref_ptr<osg::Image> image = new osg::Image();
                 image->setName(nodename + ".img");
-                image->setImage(tex->getWidth(), 1, 1, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, &tex->pixels()[0],
-                                osg::Image::NO_DELETE);
+                image->setImage(tex->getWidth(), 1, 1, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE,
+                                const_cast<unsigned char *>(&tex->pixels()[0]), osg::Image::NO_DELETE);
                 osgTex->setImage(image);
 
                 state->setTextureAttributeAndModes(0, osgTex, osg::StateAttribute::ON);

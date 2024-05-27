@@ -30,12 +30,11 @@
 #include <iostream>
 //#include <unistd.h>
 
-//#include <boost/filesystem.hpp>
 #include <boost/format.hpp>
-#include <boost/filesystem/operations.hpp>
 #include <boost/cstdint.hpp>
 
 #include <vistle/util/stopwatch.h>
+#include <vistle/util/filesystem.h>
 
 
 #include "ReadCFX.h"
@@ -44,7 +43,7 @@
 #define PARALLEL_ZONES
 
 
-namespace bf = boost::filesystem;
+namespace fs = vistle::filesystem;
 
 MODULE_MAIN(ReadCFX)
 
@@ -241,7 +240,7 @@ bool CaseInfo::checkFile(const char *filename)
         std::cout << filename << strerror(errno) << std::endl;
         return false;
     } else {
-        fileSize = bf::file_size(filename, ec);
+        fileSize = fs::file_size(filename, ec);
         if (ec)
             std::cout << "error code: " << ec << std::endl;
     }

@@ -68,22 +68,30 @@ if(NOT BUILD_SHARED_LIBS)
     set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 endif()
 
+if(VISTLE_PROFILE_NVTX)
+    add_subdirectory(profile_nvtx/c)
+    vistle_export_library(nvtx3-c)
+    vistle_export_library(nvtx3-cpp)
+endif()
+
 if(USE_SZ3)
     add_subdirectory(sz3)
 endif()
 
-set(BUILD_TESTING
-    OFF
-    CACHE INTERNAL "")
-set(BUILD_UTILITIES
-    OFF
-    CACHE INTERNAL "")
-set(ZFP_LIBRARY_PREFIX
-    "vistle_"
-    CACHE STRING "Prefix to prepend to the output library name")
-mark_as_advanced(ZFP_LIBRARY_PREFIX)
-set(CMAKE_INSTALL_INCLUDEDIR include/vistle/3rdparty)
-add_subdirectory(zfp)
+if(VISTLE_INTERNAL_ZFP)
+    set(BUILD_TESTING
+        OFF
+        CACHE INTERNAL "")
+    set(BUILD_UTILITIES
+        OFF
+        CACHE INTERNAL "")
+    set(ZFP_LIBRARY_PREFIX
+        "vistle_"
+        CACHE STRING "Prefix to prepend to the output library name")
+    mark_as_advanced(ZFP_LIBRARY_PREFIX)
+    set(CMAKE_INSTALL_INCLUDEDIR include/vistle/3rdparty)
+    add_subdirectory(zfp)
+endif()
 
 set(BUILD_SHARED_LIBS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
@@ -131,6 +139,8 @@ if(NOT VISTLE_GUI_ONLY)
         #set(VTKm_USE_DEFAULT_SYMBOL_VISIBILITY OFF)
         set(VTKm_SKIP_LIBRARY_VERSIONS ON)
 
+        set(VTKm_DEFAULT_TYPES_HEADER "../../../VtkmDefaultTypesVistle.h.in")
+
         add_subdirectory(vtk-m)
         add_library(vtkm::cont ALIAS vtkm_cont)
         add_library(vtkm::filter ALIAS vtkm_filter)
@@ -138,6 +148,7 @@ if(NOT VISTLE_GUI_ONLY)
         #add_library(vtkm_rendering ALIAS vtkm::rendering)
         #add_library(vtkm_source ALIAS vtkm::source)
         #add_library(vtkm_worklet ALIAS vtkm::worklet)
+
     endif()
 
     if(VISTLE_USE_MPI)
@@ -181,6 +192,9 @@ if(NOT VISTLE_GUI_ONLY)
         if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
             add_compile_options(-Wno-variadic-macros -Wno-pedantic)
         endif()
+        if(POLICY CMP0145)
+            set(CMAKE_POLICY_DEFAULT_CMP0145 OLD) # don't fail on include(Dart)
+        endif()
         add_subdirectory(IceT)
     endif()
 
@@ -205,3 +219,6 @@ if(VISTLE_INSTALL_3RDPARTY)
         DESTINATION include/vistle/3rdparty
         COMPONENT Devel)
 endif()
+
+include(cmrc/CMakeRC.cmake)
+vistle_export_library(cmrc-base)
