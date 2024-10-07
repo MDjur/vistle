@@ -611,7 +611,11 @@ void QConsole::mousePressEvent(QMouseEvent *event)
     oldPosition = textCursor().position();
     if (event->button() == Qt::MiddleButton) {
         copy();
+#if QT_VERSION >= 0x040600
         QTextCursor cursor = cursorForPosition(event->position().toPoint());
+#else
+        QTextCursor cursor = cursorForPosition(event->pos());
+#endif
         setTextCursor(cursor);
         paste();
         QTextEdit::mousePressEvent(event);
@@ -619,7 +623,11 @@ void QConsole::mousePressEvent(QMouseEvent *event)
     }
 
     if (event->button() == Qt::LeftButton) {
+#if QT_VERSION >= 0x040600
         auto anchor = anchorAt(event->position().toPoint());
+#else
+        auto anchor = anchorAt(event->pos());
+#endif
         pressedLink = anchor;
         if (!anchor.isEmpty()) {
             qApp->setOverrideCursor(Qt::PointingHandCursor);
@@ -634,7 +642,11 @@ void QConsole::mousePressEvent(QMouseEvent *event)
 void QConsole::mouseMoveEvent(QMouseEvent *event)
 {
     QTextEdit::mouseMoveEvent(event);
+#if QT_VERSION >= 0x040600
     auto anchor = anchorAt(event->position().toPoint());
+#else
+    auto anchor = anchorAt(event->pos());
+#endif
     if (!anchor.isEmpty()) {
         viewport()->setCursor(Qt::PointingHandCursor);
     } else {
@@ -644,7 +656,11 @@ void QConsole::mouseMoveEvent(QMouseEvent *event)
 
 void QConsole::mouseReleaseEvent(QMouseEvent *event)
 {
+#if QT_VERSION >= 0x040600
     auto anchor = anchorAt(event->position().toPoint());
+#else
+    auto anchor = anchorAt(event->pos());
+#endif
     if (!anchor.isEmpty() && pressedLink == anchor) {
         emit anchorClicked(anchor);
         qApp->restoreOverrideCursor();
@@ -675,9 +691,14 @@ void QConsole::dragMoveEvent(QDragMoveEvent *event)
 {
     //Get a cursor for the actual mouse position
     QTextCursor cur = textCursor();
-    cur.setPosition(cursorForPosition(event->position().toPoint()).position());
+#if QT_VERSION >= 0x040600
+    auto eventPos = event->position().toPoint();
+#else
+    auto eventPos = event->pos();
+#endif
+    cur.setPosition(cursorForPosition(eventPos).position());
 
-    if (!isInEditionZone(cursorForPosition(event->position().toPoint()).position())) {
+    if (!isInEditionZone(cursorForPosition(eventPos).position())) {
         //Ignore the event if out of the editable zone
         event->ignore(cursorRect(cur));
     } else {
