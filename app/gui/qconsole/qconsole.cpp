@@ -45,7 +45,7 @@ QSize PopupListWidget::sizeHint() const
     QAbstractItemDelegate *delegate = this->itemDelegate();
     const QStyleOptionViewItem sovi;
     int left, top, right, bottom = 0;
-#if QT_VERSION >= 0x040600
+#if QT_VERSION >= 0x050F0F
     QMargins margin = this->contentsMargins();
 
     top = margin.top();
@@ -611,7 +611,7 @@ void QConsole::mousePressEvent(QMouseEvent *event)
     oldPosition = textCursor().position();
     if (event->button() == Qt::MiddleButton) {
         copy();
-#if QT_VERSION >= 0x040600
+#if QT_VERSION >= 0x050F0F
         QTextCursor cursor = cursorForPosition(event->position().toPoint());
 #else
         QTextCursor cursor = cursorForPosition(event->pos());
@@ -623,7 +623,7 @@ void QConsole::mousePressEvent(QMouseEvent *event)
     }
 
     if (event->button() == Qt::LeftButton) {
-#if QT_VERSION >= 0x040600
+#if QT_VERSION >= 0x050F0F
         auto anchor = anchorAt(event->position().toPoint());
 #else
         auto anchor = anchorAt(event->pos());
@@ -642,7 +642,7 @@ void QConsole::mousePressEvent(QMouseEvent *event)
 void QConsole::mouseMoveEvent(QMouseEvent *event)
 {
     QTextEdit::mouseMoveEvent(event);
-#if QT_VERSION >= 0x040600
+#if QT_VERSION >= 0x050F0F
     auto anchor = anchorAt(event->position().toPoint());
 #else
     auto anchor = anchorAt(event->pos());
@@ -656,7 +656,7 @@ void QConsole::mouseMoveEvent(QMouseEvent *event)
 
 void QConsole::mouseReleaseEvent(QMouseEvent *event)
 {
-#if QT_VERSION >= 0x040600
+#if QT_VERSION >= 0x050F0F
     auto anchor = anchorAt(event->position().toPoint());
 #else
     auto anchor = anchorAt(event->pos());
@@ -691,7 +691,7 @@ void QConsole::dragMoveEvent(QDragMoveEvent *event)
 {
     //Get a cursor for the actual mouse position
     QTextCursor cur = textCursor();
-#if QT_VERSION >= 0x040600
+#if QT_VERSION >= 0x050F0F
     auto eventPos = event->position().toPoint();
 #else
     auto eventPos = event->pos();
