@@ -16,7 +16,7 @@
 #endif
 #include <vistle/core/unstr.h>
 
-#define NUMPARAMS 3
+#define NUMPARAMS 4
 
 using namespace vistle;
 
@@ -81,7 +81,7 @@ private:
     bool hasZData = false;
     std::string partsPath = "";
 
-    int numPartsFile = 1;
+    size_t numPartsFile = 1;
     std::vector<std::string> dataFileList;
     Index numGridCells = 0;
 

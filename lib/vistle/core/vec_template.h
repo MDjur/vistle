@@ -60,6 +60,8 @@ void Vec<T, Dim>::setSize(const size_t size)
 template<class T, unsigned Dim>
 bool Vec<T, Dim>::copyEntry(Index to, DataBase::const_ptr src, Index from)
 {
+    assert(to < getSize());
+    assert(from < src->getSize());
     auto s = Vec<T, Dim>::as(src);
     if (!s)
         return false;
@@ -332,9 +334,8 @@ void Vec<T, Dim>::print(std::ostream &os, bool verbose) const
             os << "x" << c;
             break;
         }
-        os << "(";
-        d()->x[c]->print(os, verbose);
-        os << ")";
+        os << ":";
+        d()->x[c].print(os, verbose);
     }
 }
 

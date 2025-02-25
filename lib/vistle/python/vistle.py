@@ -238,6 +238,10 @@ def saveWorkflow(f, mods, numSlaves, remote):
 
          
 def save2(file, moduleList):
+   file.write("# /usr/bin/env vistle\n")
+   file.write(f"# this is a Python workflow from Vistle {_vistle.version()}\n")
+   file.write("\n")
+
    file.write("MasterHub=getMasterHub()\n")
    file.write("VistleSession=getVistleSession()\n")
    file.write("WorkflowConfig=getWorkflowConfig()\n")
@@ -298,7 +302,7 @@ def reset():
    mods = _vistle.getRunning()
    for m in mods:
       _vistle.kill(m)
-   _vistle.barrier()
+   _vistle.barrier("reset, automatic")
    #_vistle._resetModuleCounter()
    _vistle.setLoadedFile("")
    _vistle.setStatus("Workflow cleared")
@@ -373,6 +377,7 @@ class PythonStateObserver(_vistle.StateObserver):
 
 
 # re-export functions from _vistle
+version = _vistle.version
 source = _vistle.source
 removeHub = _vistle.removeHub
 spawn = _vistle.spawn

@@ -312,13 +312,13 @@ boost::asio::ip::address AddHub::address() const
 boost::asio::ip::address_v6 AddHub::addressV6() const
 {
     assert(m_addrType == IPv6);
-    return boost::asio::ip::address_v6::from_string(m_address.data());
+    return boost::asio::ip::make_address_v6(m_address.data());
 }
 
 boost::asio::ip::address_v4 AddHub::addressV4() const
 {
     assert(m_addrType == IPv4);
-    return boost::asio::ip::address_v4::from_string(m_address.data());
+    return boost::asio::ip::make_address_v4(m_address.data());
 }
 
 void AddHub::setNumRanks(int size)
@@ -648,7 +648,7 @@ const char *CloseConnection::reason() const
     return m_reason.data();
 }
 
-ModuleExit::ModuleExit(): forwarded(false)
+ModuleExit::ModuleExit(bool crashed): forwarded(false), crashed(crashed)
 {}
 
 void ModuleExit::setForwarded()
@@ -659,6 +659,11 @@ void ModuleExit::setForwarded()
 bool ModuleExit::isForwarded() const
 {
     return forwarded;
+}
+
+bool ModuleExit::isCrashed() const
+{
+    return crashed;
 }
 
 Screenshot::Screenshot(const std::string &filename, bool quit): m_quit(quit)
@@ -1079,12 +1084,12 @@ bool AddParameter::isGroupExpanded() const
 
 std::shared_ptr<Parameter> AddParameter::getParameter() const
 {
-    std::shared_ptr<Parameter> p = vistle::getParameter(senderId(), getName(), Parameter::Type(getParameterType()),
-                                                        Parameter::Presentation(getPresentation()));
+    std::shared_ptr<Parameter> p = vistle::getParameter(senderId(), getName(), Parameter::Type(getParameterType()));
     if (p) {
         p->setDescription(description());
         p->setGroup(group());
         p->setGroupExpanded(isGroupExpanded());
+        p->setPresentation(Parameter::Presentation(getPresentation()));
     } else {
         std::cerr << "AddParameter::getParameter: " << moduleName() << ":" << getName() << ": type "
                   << getParameterType() << " not handled" << std::endl;
@@ -1298,6 +1303,11 @@ SetParameter::SetParameter(int module, const std::string &n, const StringParamVe
     //COPY_STRING(v_string, v);
 }
 
+void SetParameter::setName(const std::string &n)
+{
+    COPY_STRING(name, n);
+}
+
 void SetParameter::setInit()
 {
     initialize = true;
@@ -1498,8 +1508,15 @@ bool SetParameterChoices::apply(std::shared_ptr<vistle::Parameter> param,
     return true;
 }
 
-Barrier::Barrier()
-{}
+Barrier::Barrier(const std::string &i)
+{
+    COPY_STRING(m_info, i);
+}
+
+const char *Barrier::info() const
+{
+    return m_info.data();
+}
 
 BarrierReached::BarrierReached(const vistle::message::uuid_t &uuid)
 {
@@ -1764,13 +1781,13 @@ boost::asio::ip::address RequestTunnel::destAddr() const
 boost::asio::ip::address_v6 RequestTunnel::destAddrV6() const
 {
     assert(m_destType == IPv6);
-    return boost::asio::ip::address_v6::from_string(m_destAddr.data());
+    return boost::asio::ip::make_address_v6(m_destAddr.data());
 }
 
 boost::asio::ip::address_v4 RequestTunnel::destAddrV4() const
 {
     assert(m_destType == IPv4);
-    return boost::asio::ip::address_v4::from_string(m_destAddr.data());
+    return boost::asio::ip::make_address_v4(m_destAddr.data());
 }
 
 std::string RequestTunnel::destHost() const
@@ -2023,6 +2040,7 @@ std::ostream &operator<<(std::ostream &s, const Message &m)
     }
     case SETPARAMETER: {
         auto &mm = static_cast<const SetParameter &>(m);
+        s << ", mod: " << mm.getModule();
         s << ", name: " << mm.getName();
         s << ", type: " << Parameter::toString(mm.getParameterType());
         if (mm.isInitialization())
@@ -2069,6 +2087,21 @@ std::ostream &operator<<(std::ostream &s, const Message &m)
     case KILL: {
         auto &mm = static_cast<const Kill &>(m);
         s << ", id: " << mm.getModule();
+        break;
+    }
+    case MODULEEXIT: {
+        auto &mm = static_cast<const ModuleExit &>(m);
+        s << ", forwarded: " << mm.isForwarded() << ", crashed: " << mm.isCrashed();
+        break;
+    }
+    case QUIT: {
+        auto &mm = m.as<Quit>();
+        s << ", id: " << mm.id();
+        break;
+    }
+    case BARRIER: {
+        auto &mm = m.as<Barrier>();
+        s << ", info: " << mm.info();
         break;
     }
     case DEBUG: {

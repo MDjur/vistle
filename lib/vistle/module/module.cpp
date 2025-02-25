@@ -54,7 +54,6 @@
 //#define DEBUG
 //#define REDUCE_DEBUG
 #define DETAILED_PROGRESS
-#define REDIRECT_OUTPUT
 
 #ifdef DEBUG
 #include <vistle/util/hostname.h>
@@ -146,92 +145,6 @@ using message::Id;
 
 DEFINE_ENUM_WITH_STRING_CONVERSIONS(ObjectValidation, (Disable)(Quick)(Thorough))
 
-#ifdef REDIRECT_OUTPUT
-template<typename CharT, typename TraitsT = std::char_traits<CharT>>
-class msgstreambuf: public std::basic_streambuf<CharT, TraitsT> {
-public:
-    msgstreambuf(Module *mod): m_module(mod), m_console(true), m_gui(false) {}
-
-    ~msgstreambuf()
-    {
-        std::unique_lock<std::recursive_mutex> scoped_lock(m_mutex);
-        flush();
-        for (const auto &s: m_backlog) {
-            std::cout << s << std::endl;
-            if (m_gui)
-                m_module->sendText(message::SendText::Cerr, s);
-        }
-        m_backlog.clear();
-    }
-
-    void flush(ssize_t count = -1)
-    {
-        std::unique_lock<std::recursive_mutex> scoped_lock(m_mutex);
-        size_t size = count < 0 ? m_buf.size() : count;
-        if (size > 0) {
-            std::string msg(m_buf.data(), size);
-            m_backlog.push_back(msg);
-            if (m_backlog.size() > BacklogSize)
-                m_backlog.pop_front();
-            if (m_gui)
-                m_module->sendText(message::SendText::Cerr, msg);
-            if (m_console)
-                std::cout << msg << std::flush;
-        }
-
-        if (size == m_buf.size()) {
-            m_buf.clear();
-        } else {
-            m_buf.erase(m_buf.begin(), m_buf.begin() + size);
-        }
-    }
-
-    int overflow(int ch)
-    {
-        std::unique_lock<std::recursive_mutex> scoped_lock(m_mutex);
-        if (ch != EOF) {
-            m_buf.push_back(ch);
-            if (ch == '\n')
-                flush();
-            return 0;
-        } else {
-            return EOF;
-        }
-    }
-
-    std::streamsize xsputn(const CharT *s, std::streamsize num)
-    {
-        std::unique_lock<std::recursive_mutex> scoped_lock(m_mutex);
-        size_t end = m_buf.size();
-        m_buf.resize(end + num);
-        memcpy(m_buf.data() + end, s, num);
-        auto it = std::find(m_buf.rbegin(), m_buf.rend(), '\n');
-        if (it != m_buf.rend()) {
-            flush(it - m_buf.rend());
-        }
-        return num;
-    }
-
-    void set_console_output(bool enable) { m_console = enable; }
-
-    void set_gui_output(bool enable) { m_gui = enable; }
-
-    void clear_backlog()
-    {
-        std::unique_lock<std::recursive_mutex> scoped_lock(m_mutex);
-        m_backlog.clear();
-    }
-
-private:
-    const size_t BacklogSize = 10;
-    Module *m_module;
-    std::vector<char> m_buf;
-    std::recursive_mutex m_mutex;
-    bool m_console, m_gui;
-    std::deque<std::string> m_backlog;
-};
-#endif
-
 template<typename Retval>
 Retval get(Object::const_ptr obj, Retval (vistle::Object::*func)() const)
 {
@@ -310,8 +223,6 @@ Module::Module(const std::string &moduleName, const int moduleId, mpi::communica
 , m_defaultCacheMode(ObjectCache::CacheByName)
 , m_prioritizeVisible(true)
 , m_syncMessageProcessing(false)
-, m_origStreambuf(nullptr)
-, m_streambuf(nullptr)
 , m_traceMessages(message::INVALID)
 , m_benchmark(false)
 , m_avgComputeTime(0.)
@@ -359,7 +270,7 @@ Module::Module(const std::string &moduleName, const int moduleId, mpi::communica
               << hostname() << ":" << get_process_handle() << std::endl;
 #endif
 
-    auto cm = addIntParameter("_cache_mode", "input object caching", ObjectCache::CacheDefault, Parameter::Choice);
+    auto cm = addIntParameter("_cache_mode", "input object caching", ObjectCache::CacheByName, Parameter::Choice);
     V_ENUM_SET_CHOICES_SCOPE(cm, CacheMode, ObjectCache);
     addIntParameter("_prioritize_visible", "prioritize currently visible timestep", m_prioritizeVisible,
                     Parameter::Boolean);
@@ -453,13 +364,6 @@ const HubData &Module::getHub() const
 
 void Module::initDone()
 {
-#ifndef MODULE_THREAD
-#ifdef REDIRECT_OUTPUT
-    m_streambuf = new msgstreambuf<char>(this);
-    m_origStreambuf = std::cerr.rdbuf(m_streambuf);
-#endif
-#endif
-
     message::Started start(name());
     start.setPid(getpid());
     start.setDestId(Id::ForBroadcast);
@@ -549,22 +453,12 @@ void Module::setSyncMessageProcessing(bool sync)
 
 ObjectCache::CacheMode Module::setCacheMode(ObjectCache::CacheMode mode, bool updateParam)
 {
-    if (mode == ObjectCache::CacheDefault)
-        m_cache.setCacheMode(m_defaultCacheMode);
-    else
-        m_cache.setCacheMode(mode);
+    m_cache.setCacheMode(mode);
 
     if (updateParam)
         setIntParameter("_cache_mode", mode);
 
     return m_cache.cacheMode();
-}
-
-void Module::setDefaultCacheMode(ObjectCache::CacheMode mode)
-{
-    assert(mode != ObjectCache::CacheDefault);
-    m_defaultCacheMode = mode;
-    setCacheMode(m_defaultCacheMode, false);
 }
 
 
@@ -779,25 +673,27 @@ bool Module::broadcastObject(const mpi::communicator &comm, Object::const_ptr &o
 
     if (comm.rank() == root) {
         assert(obj->check(std::cerr));
-        vecostreambuf<buffer> memstr;
-        vistle::oarchive memar(memstr);
+        vecostreambuf<buffer> objstr;
+        vistle::oarchive objar(objstr);
         auto saver = std::make_shared<DeepArchiveSaver>();
-        memar.setSaver(saver);
-        obj->saveObject(memar);
-        const buffer &mem = memstr.get_vector();
-        mpi::broadcast(comm, const_cast<buffer &>(mem), root);
+        objar.setSaver(saver);
+        obj->saveObject(objar);
+        const buffer &objbuf = objstr.get_vector();
+        mpi::broadcast(comm, const_cast<buffer &>(objbuf), root);
+
         auto dir = saver->getDirectory();
         mpi::broadcast(comm, dir, root);
         for (auto &ent: dir) {
             bigmpi::broadcast(comm, ent.data, ent.size, root);
         }
     } else {
-        buffer mem;
-        mpi::broadcast(comm, mem, root);
+        buffer objbuf;
+        mpi::broadcast(comm, objbuf, root);
         vistle::SubArchiveDirectory dir;
         std::map<std::string, buffer> objects, arrays;
         std::map<std::string, message::CompressionMode> comp;
         std::map<std::string, size_t> rawsizes;
+
         mpi::broadcast(comm, dir, root);
         for (auto &ent: dir) {
             if (ent.is_array) {
@@ -809,12 +705,13 @@ bool Module::broadcastObject(const mpi::communicator &comm, Object::const_ptr &o
             }
             bigmpi::broadcast(comm, ent.data, ent.size, root);
         }
-        vecistreambuf<buffer> membuf(mem);
-        vistle::iarchive memar(membuf);
+
+        vecistreambuf<buffer> objstr(objbuf);
+        vistle::iarchive objar(objstr);
         auto fetcher = std::make_shared<DeepArchiveFetcher>(objects, arrays, comp, rawsizes);
-        memar.setFetcher(fetcher);
+        objar.setFetcher(fetcher);
         //std::cerr << "DeepArchiveFetcher: " << *fetcher << std::endl;
-        obj.reset(Object::loadObject(memar));
+        obj.reset(Object::loadObject(objar));
         obj->refresh();
         //std::cerr << "broadcastObject recv " << obj->getName() << ": refcount=" << obj->refcount() << std::endl;
         assert(obj->check(std::cerr));
@@ -826,11 +723,39 @@ bool Module::broadcastObject(const mpi::communicator &comm, Object::const_ptr &o
 
 bool Module::broadcastObject(Object::const_ptr &object, int root) const
 {
+    bool ret = true;
+    if (m_validateObjects != ObjectValidation::Disable && m_rank == root) {
+        object->refresh();
+        std::stringstream str;
+        bool ok = object->check(str, m_validateObjects == ObjectValidation::Quick);
+        if (!ok) {
+            std::stringstream str2;
+            str2 << "validation failed for object " << object->getName() << " before broadcast" << std::endl;
+            str2 << "   " << *object << std::endl;
+            str2 << "   " << str.str();
+            sendError(str2.str());
+            ret = false;
+        }
+    }
 #if 0
-    return broadcastObject(comm(), object, root);
+    ret &= broadcastObject(comm(), object, root);
 #else
-    return broadcastObjectViaShm(object, root);
+    ret &= broadcastObjectViaShm(object, root);
 #endif
+    if (m_validateObjects != ObjectValidation::Disable && m_rank != root) {
+        object->refresh();
+        std::stringstream str;
+        bool ok = object->check(str, m_validateObjects == ObjectValidation::Quick);
+        if (!ok) {
+            std::stringstream str2;
+            str2 << "validation failed for object " << object->getName() << " after broadcast" << std::endl;
+            str2 << "   " << *object << std::endl;
+            str2 << "   " << str.str();
+            sendError(str2.str());
+            ret = false;
+        }
+    }
+    return ret;
 }
 
 bool Module::broadcastObjectViaShm(const mpi::communicator &comm, Object::const_ptr &object, const std::string &objName,
@@ -911,38 +836,16 @@ void Module::updateCacheMode()
     Integer value = getIntParameter("_cache_mode");
     switch (value) {
     case ObjectCache::CacheNone:
+    case ObjectCache::CacheByName:
     case ObjectCache::CacheDeleteEarly:
     case ObjectCache::CacheDeleteLate:
-    case ObjectCache::CacheDefault:
         break;
     default:
-        value = ObjectCache::CacheDefault;
+        value = ObjectCache::CacheByName;
         break;
     }
 
     setCacheMode(ObjectCache::CacheMode(value), false);
-}
-
-void Module::updateOutputMode()
-{
-#ifndef MODULE_THREAD
-#ifdef REDIRECT_OUTPUT
-    const Integer r = getIntParameter("_error_output_rank");
-    const Integer m = getIntParameter("_error_output_mode");
-
-    auto sbuf = dynamic_cast<msgstreambuf<char> *>(m_streambuf);
-    if (!sbuf)
-        return;
-
-    if (r == -1 || r == rank()) {
-        sbuf->set_console_output(m & 1);
-        sbuf->set_gui_output(m & 2);
-    } else {
-        sbuf->set_console_output(false);
-        sbuf->set_gui_output(false);
-    }
-#endif
-#endif
 }
 
 void Module::waitAllTasks()
@@ -963,7 +866,7 @@ void Module::updateMeta(vistle::Object::ptr obj) const
         return;
 
     {
-        std::lock_guard guard(obj->mutex());
+        std::lock_guard guard(obj->attachmentMutex());
         obj->setCreator(id());
         obj->setGeneration(m_generation + m_cache.generation());
         if (m_iteration >= 0) {
@@ -977,7 +880,7 @@ void Module::updateMeta(vistle::Object::ptr obj) const
     // update referenced objects, if not yet valid
     auto refs = obj->referencedObjects();
     for (auto &ref: refs) {
-        std::lock_guard guard(ref->mutex());
+        std::lock_guard guard(ref->attachmentMutex());
         if (ref->getCreator() == -1) {
             auto o = std::const_pointer_cast<Object>(ref);
             o->setCreator(id());
@@ -992,14 +895,18 @@ void Module::updateMeta(vistle::Object::ptr obj) const
     }
 }
 
-void Module::setItemInfo(const std::string &text, const std::string &port)
+void Module::setItemInfo(const std::string &text, const std::string &port, message::ItemInfo::InfoType type)
 {
+    using message::ItemInfo;
     if (rank() != 0)
         return;
-    auto &old = m_currentItemInfo[port];
+    if (type == ItemInfo::Unspecified) {
+        type = port.empty() ? ItemInfo::Module : ItemInfo::Port;
+    }
+    InfoKey key(port, type);
+    auto &old = m_currentItemInfo[key];
     if (old != text) {
-        using message::ItemInfo;
-        ItemInfo info(port.empty() ? ItemInfo::Module : ItemInfo::Port, port);
+        ItemInfo info(type, port);
         ItemInfo::Payload pl(text);
         sendMessageWithPayload(info, pl);
         old = text;
@@ -1059,18 +966,28 @@ bool Module::passThroughObject(Port *port, vistle::Object::const_ptr object)
 
     std::string info;
     std::string species = object->getAttribute("_species");
+    std::string mapped, geometry, mapping;
     if (!species.empty()) {
         info += species + " - ";
     }
     std::string type = Object::toString(object->getType());
     info += type;
     if (auto d = DataBase::as(object)) {
+        mapped = type;
+        mapping = DataBase::toString(d->guessMapping());
         if (auto g = d->grid()) {
             info += " on ";
-            info += Object::toString(g->getType());
+            geometry = Object::toString(g->getType());
+            info += geometry;
         }
     }
-    setItemInfo(info, port->getName());
+    const std::string pname = port->getName();
+    setItemInfo(info, pname, message::ItemInfo::Port);
+    setItemInfo(type, pname, message::ItemInfo::PortType);
+    setItemInfo(species, pname, message::ItemInfo::PortSpecies);
+    setItemInfo(mapped, pname, message::ItemInfo::PortMapped);
+    setItemInfo(geometry, pname, message::ItemInfo::PortGeometry);
+    setItemInfo(mapping, pname, message::ItemInfo::PortMapping);
     return true;
 }
 
@@ -1264,9 +1181,7 @@ bool Module::changeParameter(const Parameter *p)
 {
     std::string name = p->getName();
     if (!name.empty() && name[0] == '_') {
-        if (name == "_error_output_mode" || name == "_error_output_rank") {
-            updateOutputMode();
-        } else if (name == "_cache_mode") {
+        if (name == "_cache_mode") {
             updateCacheMode();
         } else if (name == "_openmp_threads") {
             setOpenmpThreads((int)getIntParameter(name), false);
@@ -1480,12 +1395,15 @@ bool Module::dispatch(bool block, bool *messageReceived, unsigned int minPrio)
         Shm::the().setRemoveOnDetach();
         throw(e);
     } catch (vistle::exception &e) {
-        std::cerr << "Vistle exception in module " << name() << ": " << e.what() << e.where() << std::endl;
+        std::cerr << "Vistle exception in module " << name() << ": " << e.what() << "\n" << e.where() << std::endl;
+        sendError("terminating with Vistle exception: %s", e.what());
         throw(e);
     } catch (std::exception &e) {
         std::cerr << "exception in module " << name() << ": " << e.what() << std::endl;
+        sendError("terminating with exception: %s", e.what());
         throw(e);
     } catch (...) {
+        sendError("terminating with unknown exception");
         std::cerr << "unknown exception in module " << name() << std::endl;
         throw;
     }
@@ -1572,14 +1490,16 @@ bool Module::handleMessage(const vistle::message::Message *message, const Messag
     switch (message->type()) {
     case vistle::message::TRACE: {
         const Trace *trace = static_cast<const Trace *>(message);
-        if (trace->on()) {
-            m_traceMessages = trace->messageType();
-        } else {
-            m_traceMessages = message::INVALID;
-        }
+        if (trace->destId() == id() || trace->destId() == message::Id::Broadcast) {
+            if (trace->on()) {
+                m_traceMessages = trace->messageType();
+            } else {
+                m_traceMessages = message::INVALID;
+            }
 
-        std::cerr << "    module [" << name() << "] [" << id() << "] [" << rank() << "/" << size() << "] trace ["
-                  << trace->on() << "]" << std::endl;
+            std::cerr << "    module [" << name() << "] [" << id() << "] [" << rank() << "/" << size() << "] trace ["
+                      << trace->on() << "]" << std::endl;
+        }
         break;
     }
 
@@ -1587,10 +1507,6 @@ bool Module::handleMessage(const vistle::message::Message *message, const Messag
         const message::Quit *quit = static_cast<const message::Quit *>(message);
         //TODO: uuid should be included in corresponding ModuleExit message
         (void)quit;
-#ifdef REDIRECT_OUTPUT
-        if (auto sbuf = dynamic_cast<msgstreambuf<char> *>(m_streambuf))
-            sbuf->clear_backlog();
-#endif
         return false;
         break;
     }
@@ -1599,10 +1515,6 @@ bool Module::handleMessage(const vistle::message::Message *message, const Messag
         const message::Kill *kill = static_cast<const message::Kill *>(message);
         //TODO: uuid should be included in corresponding ModuleExit message
         if (kill->getModule() == id() || kill->getModule() == message::Id::Broadcast) {
-#ifdef REDIRECT_OUTPUT
-            if (auto sbuf = dynamic_cast<msgstreambuf<char> *>(m_streambuf))
-                sbuf->clear_backlog();
-#endif
             return false;
         } else {
             std::cerr << "module [" << name() << "] [" << id() << "] [" << rank() << "/" << size() << "]"
@@ -2095,7 +2007,7 @@ bool Module::handleExecute(const vistle::message::Execute *exec)
                         auto cache = m_cache.getObjects(port.first);
                         if (!cache.second) {
                             // FIXME: should collectively ignore cache
-                            CERR << "failed to retrieve objects from input cache" << std::endl;
+                            CERR << "failed to retrieve objects from input cache on port " << port.first << std::endl;
                             cache.first.clear();
                         }
                         auto objs = cache.first;
@@ -2421,18 +2333,12 @@ Module::~Module()
     }
 
     vistle::message::ModuleExit m;
-    m.setDestId(Id::ForBroadcast);
     sendMessage(m);
 
     delete sendMessageQueue;
     sendMessageQueue = nullptr;
     delete receiveMessageQueue;
     receiveMessageQueue = nullptr;
-
-    if (m_origStreambuf)
-        std::cerr.rdbuf(m_origStreambuf);
-    delete m_streambuf;
-    m_streambuf = nullptr;
 }
 
 void Module::eventLoop()
@@ -2662,7 +2568,7 @@ bool Module::compute()
     m_tasks.push_back(task);
 
     std::unique_lock<std::mutex> guard(task->m_mutex);
-    auto tname = name() + ":Block:" + std::to_string(m_tasks.size());
+    auto tname = std::to_string(id()) + "b" + std::to_string(m_tasks.size()) + ":" + name();
     task->m_future = std::async(std::launch::async, [this, tname, task] {
         PROF_FUNC();
         setThreadName(tname);

@@ -50,7 +50,7 @@ ReadCovise::ReadCovise(const std::string &name, int moduleID, mpi::communicator 
     m_fieldFile[0] = addStringParameter("grid", "filename for grid", NONE, Parameter::Choice);
 #else
     m_gridFile = addStringParameter("filename", "name of COVISE file", "", Parameter::ExistingFilename);
-    setParameterFilters(m_gridFile, "COVISE Files (*.covise)/All Files (*)");
+    setParameterFilters(m_gridFile, "COVISE Files (*.covise)");
     m_fieldFile[0] = m_gridFile;
 #endif
     m_out[0] = createOutputPort("grid_out", "grid or geometry");
@@ -59,7 +59,7 @@ ReadCovise::ReadCovise(const std::string &name, int moduleID, mpi::communicator 
     m_fieldFile[1] = addStringParameter("normals", "name of COVISE file for normals", NONE, Parameter::Choice);
 #else
     m_fieldFile[1] = addStringParameter("normals", "name of COVISE file for normals", "", Parameter::ExistingFilename);
-    setParameterFilters(m_fieldFile[1], "COVISE Files (*.covise)/All Files (*)");
+    setParameterFilters(m_fieldFile[1], "COVISE Files (*.covise)");
 #endif
     m_out[1] = nullptr;
     for (unsigned i = 2; i < NumPorts; ++i) {
@@ -71,7 +71,7 @@ ReadCovise::ReadCovise(const std::string &name, int moduleID, mpi::communicator 
         m_fieldFile[i] =
             addStringParameter("field" + std::to_string(i - 2), "name of COVISE file for field " + std::to_string(i),
                                "", Parameter::ExistingFilename);
-        setParameterFilters(m_fieldFile[i], "COVISE Files (*.covise)/All Files (*)");
+        setParameterFilters(m_fieldFile[i], "COVISE Files (*.covise)");
 #endif
         m_out[i] = createOutputPort("field" + std::to_string(i - 2) + "_out", "data mapped to geometry");
     }
@@ -476,9 +476,9 @@ Object::ptr ReadCovise::readSTRGRD(Token &token, const int port, int fd, const b
         Scalar *x = str->x().data(), *y = str->y().data(), *z = str->z().data();
         size_t idx = 0;
         const Index vdim[3] = {static_cast<Index>(dim[0]), static_cast<Index>(dim[1]), static_cast<Index>(dim[2])};
-        for (Index k = 0; k < dim[0]; ++k) {
-            for (Index j = 0; j < dim[1]; ++j) {
-                for (Index i = 0; i < dim[2]; ++i) {
+        for (Index k = 0; k < vdim[0]; ++k) {
+            for (Index j = 0; j < vdim[1]; ++j) {
+                for (Index i = 0; i < vdim[2]; ++i) {
                     auto vidx = StructuredGrid::vertexIndex(k, j, i, vdim);
                     x[vidx] = _x[idx];
                     y[vidx] = _y[idx];
@@ -677,9 +677,9 @@ Object::ptr ReadCovise::readSTRSDT(Token &token, const int port, int fd, const b
         auto x = array->x().data();
         const Index vdim[3] = {static_cast<Index>(sx), static_cast<Index>(sy), static_cast<Index>(sz)};
         Index idx = 0;
-        for (Index k = 0; k < sx; ++k) {
-            for (Index j = 0; j < sy; ++j) {
-                for (Index i = 0; i < sz; ++i) {
+        for (Index k = 0; k < vdim[0]; ++k) {
+            for (Index j = 0; j < vdim[1]; ++j) {
+                for (Index i = 0; i < vdim[2]; ++i) {
                     auto vidx = StructuredGrid::vertexIndex(k, j, i, vdim);
                     x[vidx] = _x[idx];
                     ++idx;
@@ -716,9 +716,9 @@ Object::ptr ReadCovise::readSTRVDT(Token &token, const int port, int fd, const b
         auto z = array->z().data();
         const Index vdim[3] = {static_cast<Index>(sx), static_cast<Index>(sy), static_cast<Index>(sz)};
         Index idx = 0;
-        for (Index k = 0; k < sx; ++k) {
-            for (Index j = 0; j < sy; ++j) {
-                for (Index i = 0; i < sz; ++i) {
+        for (Index k = 0; k < vdim[0]; ++k) {
+            for (Index j = 0; j < vdim[1]; ++j) {
+                for (Index i = 0; i < vdim[2]; ++i) {
                     auto vidx = StructuredGrid::vertexIndex(k, j, i, vdim);
                     x[vidx] = _x[idx];
                     y[vidx] = _y[idx];

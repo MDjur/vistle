@@ -174,11 +174,11 @@ private:
         //#endif
         std::thread messageThread;
         std::shared_ptr<message::MessageQueue> sendQueue, recvQueue;
-        int ranksStarted, ranksFinished;
-        bool prepared, reduced;
-        int busyCount;
+        int ranksStarted = 0, ranksFinished = 0;
+        bool prepared = false, reduced = true;
+        int busyCount = 0;
         // handling of outgoing messages
-        mutable bool blocked; // any message is blocking and cannot be sent right away
+        mutable bool blocked = false; // any message is blocking and cannot be sent right away
         mutable std::deque<message::Buffer> blockers; // queue of blocking messages
         mutable std::deque<MessageWithPayload> blockedMessages; // again, but with payload
         std::deque<MessageWithPayload>
@@ -199,19 +199,16 @@ private:
         bool haveDelayed() const;
     };
     typedef std::unordered_map<int, Module> RunningMap;
-    RunningMap runningMap;
+    RunningMap m_runningMap, m_crashedMap;
     int numRunning() const;
     bool isReadyForExecute(int modId) const;
     int m_numExecuting = 0;
 
     // barrier related stuff
-    bool checkBarrier(const message::uuid_t &uuid) const;
-    void barrierReached(const message::uuid_t &uuid);
     bool m_barrierActive;
     message::uuid_t m_barrierUuid;
-    int m_reachedBarriers;
     typedef std::set<int> ModuleSet;
-    ModuleSet reachedSet;
+    ModuleSet m_reachedSet;
 
     std::vector<int> m_numTransfering;
     long m_totalNumTransferring = 0;

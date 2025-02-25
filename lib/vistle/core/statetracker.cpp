@@ -38,6 +38,8 @@ int StateTracker::Module::state() const
         s |= StateObserver::Killed;
     if (executing)
         s |= StateObserver::Executing;
+    if (crashed)
+        s |= StateObserver::Crashed;
     return s;
 }
 
@@ -73,6 +75,11 @@ void StateTracker::unlock()
     return m_stateMutex.unlock();
 }
 
+bool StateTracker::quitting() const
+{
+    return m_quitting;
+}
+
 void StateTracker::setId(int id)
 {
     m_id = id;
@@ -87,6 +94,7 @@ std::vector<int> StateTracker::getHubs() const
 {
     mutex_locker guard(m_stateMutex);
     std::vector<int> hubs;
+    hubs.reserve(m_hubs.size());
     for (auto it = m_hubs.rbegin(); it != m_hubs.rend(); ++it) {
         const auto &h = *it;
         hubs.push_back(h.id);
@@ -98,6 +106,7 @@ std::vector<int> StateTracker::getSlaveHubs() const
 {
     mutex_locker guard(m_stateMutex);
     std::vector<int> hubs;
+    hubs.reserve(m_hubs.size());
     for (auto it = m_hubs.rbegin(); it != m_hubs.rend(); ++it) {
         const auto &h = *it;
         if (h.id != Id::MasterHub)
@@ -116,10 +125,10 @@ const std::string &StateTracker::hubName(int id) const
     return unknown;
 }
 
-int StateTracker::getNumRunning() const
+unsigned StateTracker::getNumRunning() const
 {
     mutex_locker guard(m_stateMutex);
-    int num = 0;
+    unsigned num = 0;
     for (RunningMap::const_iterator it = runningMap.begin(); it != runningMap.end(); ++it) {
         if (Id::isModule(it->first))
             ++num;
@@ -131,6 +140,7 @@ std::vector<int> StateTracker::getRunningList() const
 {
     mutex_locker guard(m_stateMutex);
     std::vector<int> result;
+    result.reserve(runningMap.size());
     for (RunningMap::const_iterator it = runningMap.begin(); it != runningMap.end(); ++it) {
         if (Id::isModule(it->first))
             result.push_back(it->first);
@@ -142,6 +152,7 @@ std::vector<int> StateTracker::getBusyList() const
 {
     mutex_locker guard(m_stateMutex);
     std::vector<int> result;
+    result.reserve(busySet.size());
     for (ModuleSet::const_iterator it = busySet.begin(); it != busySet.end(); ++it) {
         result.push_back(*it);
     }
@@ -157,6 +168,9 @@ int StateTracker::getHub(int id) const
     if (id == Id::Vistle || id == Id::Config) {
         return Id::MasterHub;
     }
+
+    if (id == Id::LocalManager)
+        return Id::LocalHub;
 
     RunningMap::const_iterator it = runningMap.find(id);
     if (it == runningMap.end()) {
@@ -312,6 +326,12 @@ void StateTracker::appendModuleState(VistleState &state, const StateTracker::Mod
         Kill k(m.id);
         appendMessage(state, k);
     }
+
+    if (m.crashed) {
+        ModuleExit crash(true);
+        crash.setSenderId(m.id);
+        appendMessage(state, crash);
+    }
 }
 
 void StateTracker::appendModuleParameter(VistleState &state, const Module &m) const
@@ -409,20 +429,20 @@ StateTracker::VistleState StateTracker::getState() const
 
     appendMessage(state, Trace(m_traceId, m_traceType, m_traceId != Id::Invalid || m_traceType != message::INVALID));
 
-    for (const auto &slave: m_hubs) {
-        AddHub msg(slave.id, slave.name);
-        msg.setLoginName(slave.logName);
-        msg.setRealName(slave.realName);
-        msg.setNumRanks(slave.numRanks);
-        msg.setPort(slave.port);
-        msg.setDataPort(slave.dataPort);
-        if (!slave.address.is_unspecified())
-            msg.setAddress(slave.address);
-        msg.setHasUserInterface(slave.hasUi);
-        msg.setSystemType(slave.systemType);
-        msg.setArch(slave.arch);
-        msg.setInfo(slave.info);
-        msg.setVersion(slave.version);
+    for (const auto &hub: m_hubs) {
+        AddHub msg(hub.id, hub.name);
+        msg.setLoginName(hub.logName);
+        msg.setRealName(hub.realName);
+        msg.setNumRanks(hub.numRanks);
+        msg.setPort(hub.port);
+        msg.setDataPort(hub.dataPort);
+        if (!hub.address.is_unspecified())
+            msg.setAddress(hub.address);
+        msg.setHasUserInterface(hub.hasUi);
+        msg.setSystemType(hub.systemType);
+        msg.setArch(hub.arch);
+        msg.setInfo(hub.info);
+        msg.setVersion(hub.version);
         appendMessage(state, msg);
     }
 
@@ -537,7 +557,18 @@ bool StateTracker::handle(const message::Message &msg, const char *payload, size
     m_aggregatedPayload += msg.payloadSize();
 
 #ifndef NDEBUG
-    if (msg.type() != message::ADDOBJECT && msg.uuid() != msg.referrer()) {
+    switch (msg.type()) {
+    case message::BARRIER:
+    case message::BARRIERREACHED:
+    case message::SPAWN:
+    case message::SPAWNPREPARED:
+        break;
+    case message::ADDOBJECT:
+        if (msg.uuid() != msg.referrer()) {
+            break;
+        }
+        // fall through
+    default:
         if (m_alreadySeen.find(msg.uuid()) != m_alreadySeen.end()) {
             CERR << "duplicate message: " << msg << std::endl;
         }
@@ -573,8 +604,8 @@ bool StateTracker::handle(const message::Message &msg, const char *payload, size
         break;
     }
     case ADDHUB: {
-        const auto &slave = msg.as<AddHub>();
-        handled = handlePriv(slave);
+        const auto &hub = msg.as<AddHub>();
+        handled = handlePriv(hub);
         break;
     }
     case REMOVEHUB: {
@@ -834,6 +865,7 @@ void StateTracker::cleanQueue(int id)
 
     VistleState queue;
     std::swap(m_queue, queue);
+    m_queue.reserve(queue.size());
 
     for (auto &m: queue) {
         auto &msg = m.message;
@@ -880,36 +912,36 @@ bool StateTracker::handlePriv(const message::RemoveHub &rm)
     return true;
 }
 
-bool StateTracker::handlePriv(const message::AddHub &slave)
+bool StateTracker::handlePriv(const message::AddHub &hub)
 {
     std::lock_guard<mutex> locker(m_slaveMutex);
     for (auto &h: m_hubs) {
-        if (h.id == slave.id()) {
+        if (h.id == hub.id()) {
             m_slaveCondition.notify_all();
             return true;
         }
     }
-    m_hubs.emplace_back(slave.id(), slave.name());
-    m_hubs.back().numRanks = slave.numRanks();
-    m_hubs.back().port = slave.port();
-    m_hubs.back().dataPort = slave.dataPort();
-    if (slave.hasAddress())
-        m_hubs.back().address = slave.address();
-    m_hubs.back().logName = slave.loginName();
-    m_hubs.back().realName = slave.realName();
-    m_hubs.back().hasUi = slave.hasUserInterface();
-    m_hubs.back().systemType = slave.systemType();
-    m_hubs.back().arch = slave.arch();
-    m_hubs.back().info = slave.info();
-    m_hubs.back().version = slave.version();
+    m_hubs.emplace_back(hub.id(), hub.name());
+    m_hubs.back().numRanks = hub.numRanks();
+    m_hubs.back().port = hub.port();
+    m_hubs.back().dataPort = hub.dataPort();
+    if (hub.hasAddress())
+        m_hubs.back().address = hub.address();
+    m_hubs.back().logName = hub.loginName();
+    m_hubs.back().realName = hub.realName();
+    m_hubs.back().hasUi = hub.hasUserInterface();
+    m_hubs.back().systemType = hub.systemType();
+    m_hubs.back().arch = hub.arch();
+    m_hubs.back().info = hub.info();
+    m_hubs.back().version = hub.version();
 
     // for per-hub parameters
-    Module hub(slave.id(), slave.id());
-    hub.name = slave.name();
-    runningMap.emplace(slave.id(), hub);
+    Module hubMod(hub.id(), hub.id());
+    hubMod.name = hub.name();
+    runningMap.emplace(hub.id(), hubMod);
 
     for (StateObserver *o: m_observers) {
-        o->newHub(slave.id(), slave);
+        o->newHub(hub.id(), hub);
     }
 
     m_slaveCondition.notify_all();
@@ -1091,17 +1123,26 @@ bool StateTracker::handlePriv(const message::ModuleExit &moduleExit)
 {
     mutex_locker guard(m_stateMutex);
     const int mod = moduleExit.senderId();
+    const bool crashed = moduleExit.isCrashed();
     //CERR << " Module [" << mod << "] quit" << std::endl;
     ++m_graphChangeCount;
 
-    portTracker()->removeModule(mod);
+    if (crashed) {
+        RunningMap::iterator it = runningMap.find(mod);
+        if (it != runningMap.end()) {
+            it->second.crashed = true;
+            for (StateObserver *o: m_observers) {
+                o->moduleStateChanged(mod, it->second.state());
+            }
+        }
+    } else {
+        portTracker()->removeModule(mod);
 
-    for (StateObserver *o: m_observers) {
-        o->incModificationCount();
-        o->deleteModule(mod);
-    }
+        for (StateObserver *o: m_observers) {
+            o->incModificationCount();
+            o->deleteModule(mod);
+        }
 
-    {
         RunningMap::iterator it = runningMap.find(mod);
         if (it != runningMap.end()) {
             int mid = it->second.mirrorOfId;
@@ -1257,13 +1298,13 @@ bool StateTracker::handlePriv(const message::AddParameter &addParam)
         po[maxIdx + 1] = addParam.getName();
     }
 
-    const Port *p = nullptr;
-    if (portTracker()) {
-        p = portTracker()->addPort(addParam.senderId(), addParam.getName(), addParam.description(), Port::PARAMETER);
-    }
     for (StateObserver *o: m_observers) {
         o->newParameter(addParam.senderId(), addParam.getName());
-        if (p) {
+    }
+    const Port *p = nullptr;
+    if (portTracker()) {
+        if (const Port *p = portTracker()->addPort(addParam.senderId(), addParam.getName(), addParam.description(),
+                                                   Port::PARAMETER)) {
             for (StateObserver *o: m_observers) {
                 o->newPort(p->getModuleID(), p->getName());
             }
@@ -1378,7 +1419,9 @@ bool StateTracker::handlePriv(const message::Quit &quit)
 {
     mutex_locker guard(m_stateMutex);
     int id = quit.id();
-    if (Id::isHub(id)) {
+    if (id == Id::Broadcast) {
+        m_quitting = true;
+    } else if (Id::isHub(id)) {
         auto *hub = getModifiableHubData(id);
         if (hub) {
             hub->isQuitting = true;
@@ -1433,12 +1476,21 @@ bool StateTracker::handlePriv(const message::AddObject &addObj)
 
 bool StateTracker::handlePriv(const message::Barrier &barrier)
 {
+    m_barriers[barrier.uuid()] = barrier.info();
     return true;
 }
 
 bool StateTracker::handlePriv(const message::BarrierReached &barrReached)
 {
     return true;
+}
+
+std::string StateTracker::barrierInfo(const message::uuid_t &uuid) const
+{
+    auto it = m_barriers.find(uuid);
+    if (it == m_barriers.end())
+        return std::string("NO INFO");
+    return it->second;
 }
 
 bool StateTracker::handlePriv(const message::AddPort &createPort)
@@ -1500,7 +1552,6 @@ bool StateTracker::handlePriv(const message::ItemInfo &info, const buffer &paylo
 bool StateTracker::handlePriv(const message::SendText &info, const buffer &payload)
 {
     auto pl = message::getPayload<message::SendText::Payload>(payload);
-    mutex_locker guard(m_stateMutex);
     for (StateObserver *o: m_observers) {
         o->info(pl.text, info.textType(), info.senderId(), info.rank(), info.referenceType(), info.referenceUuid());
     }
@@ -1660,6 +1711,7 @@ std::vector<std::string> StateTracker::getParameters(int id) const
         return result;
 
     const ParameterOrder &po = rit->second.paramOrder;
+    result.reserve(po.size());
     BOOST_FOREACH (ParameterOrder::value_type val, po) {
         const auto &name = val.second;
         result.push_back(name);
@@ -1702,7 +1754,7 @@ std::shared_ptr<message::Buffer> StateTracker::waitForReply(const message::uuid_
 {
     std::unique_lock<mutex> locker(m_replyMutex);
     std::shared_ptr<message::Buffer> ret = removeRequest(uuid);
-    while (!ret) {
+    while (!ret && !m_quitting) {
         m_replyCondition.wait(locker);
         ret = removeRequest(uuid);
     }
@@ -1730,7 +1782,7 @@ bool StateTracker::registerReply(const message::uuid_t &uuid, const message::Mes
         return false;
     }
     if (it->second) {
-        CERR << "attempt to register duplicate reply for " << uuid << std::endl;
+        CERR << "attempt to register duplicate reply for " << uuid << ": " << msg << std::endl;
         assert(!it->second);
         return false;
     }
@@ -1760,18 +1812,20 @@ std::vector<int> StateTracker::waitForSlaveHubs(const std::vector<std::string> &
     auto findAll = [this](const std::vector<std::string> &names, std::vector<int> &ids) -> bool {
         const auto hubIds = getSlaveHubs();
         std::vector<std::string> available;
+        available.reserve(hubIds.size());
         for (int id: hubIds)
             available.push_back(hubName(id));
 
         ids.clear();
+        ids.reserve(names.size());
         size_t found = 0;
         for (const auto &name: names) {
-            for (const auto &slave: m_hubs) {
-                if (slave.id == Id::MasterHub)
+            for (const auto &hub: m_hubs) {
+                if (hub.id == Id::MasterHub)
                     continue;
-                if (name == slave.name) {
+                if (name == hub.name) {
                     ++found;
-                    ids.push_back(slave.id);
+                    ids.push_back(hub.id);
                 } else {
                     ids.push_back(Id::Invalid);
                 }

@@ -21,6 +21,7 @@
 #include <boost/program_options.hpp>
 
 #include <thread>
+#include <csignal>
 
 #include <QClipboard>
 #include <QDir>
@@ -35,6 +36,8 @@
 #include "ui_about.h"
 
 namespace gui {
+
+QStringList fileNameFilters{"Vistle Files (*.vsl)", "Python Files (*.py)"};
 
 UiController::UiController(int argc, char *argv[], QObject *parent): QObject(parent), m_mainWindow(nullptr)
 {
@@ -275,11 +278,32 @@ bool UiController::init()
 
     moduleSelectionChanged();
 
+    // restore default handler for Ctrl-C
+    signal(SIGINT, SIG_DFL);
+
+    m_mainWindow->dataFlowView()->setFocusProxy(m_mainWindow->moduleBrowser());
+    m_mainWindow->moduleBrowser()->setFocus();
+
+    m_mainWindow->installEventFilter(this);
+
     return true;
 }
 
 UiController::~UiController()
 {}
+
+bool UiController::eventFilter(QObject *object, QEvent *event)
+{
+    if (object == m_mainWindow && event->type() == QEvent::KeyPress) {
+        QKeyEvent *keyEvent = static_cast<QKeyEvent *>(event);
+        if (keyEvent->key() == Qt::Key_Escape) {
+            m_mainWindow->dataFlowView()->setFocus();
+            return true;
+        } else
+            return false;
+    }
+    return false;
+}
 
 void UiController::finish()
 {
@@ -346,7 +370,7 @@ void UiController::loadDataFlowNetworkOnGui()
 
     QString dir = m_currentFile.isEmpty() ? QDir::currentPath() : m_currentFile;
     QString filename = QFileDialog::getOpenFileName(m_mainWindow, tr("Open Workflow"), dir,
-                                                    tr("Vistle files (*.vsl);;Python files (*.py);;All files (*)"));
+                                                    tr("Vistle Files (*.vsl);;Python Files (*.py);;All Files (*)"));
 
     if (filename.isEmpty())
         return;
@@ -374,8 +398,7 @@ void UiController::loadDataFlowNetworkOnHub()
     browser->selectFile(m_currentFile.isEmpty() ? "." : m_currentFile);
     browser->setFileMode(RemoteFileDialog::ExistingFile);
     browser->setAcceptMode(RemoteFileDialog::AcceptOpen);
-    QStringList filters{"Vistle files (*.vsl)", "Python files (*.py)", "All files (*)"};
-    browser->setNameFilters(filters);
+    browser->setNameFilters(fileNameFilters);
     browser->setWindowTitle("Open Workflow");
 
     connect(browser, &QDialog::accepted, [this, browser]() {
@@ -426,9 +449,9 @@ void UiController::saveDataFlowNetwork(const QString &filename, int hubId)
 
 void UiController::saveDataFlowNetworkOnGui(const QString &filename)
 {
+    QString filters = fileNameFilters.join(";;");
     QString newFile = QFileDialog::getSaveFileName(m_mainWindow, tr("Save Workflow"),
-                                                   filename.isEmpty() ? QDir::currentPath() : filename,
-                                                   tr("Vistle files (*.vsl);;Python files (*.py);;All files (*)"));
+                                                   filename.isEmpty() ? QDir::currentPath() : filename, filters);
 
     if (!newFile.isEmpty()) {
         saveDataFlowNetwork(newFile, vistle::message::Id::UI);
@@ -449,8 +472,7 @@ void UiController::saveDataFlowNetworkOnHub(const QString &pathname)
         browser->selectFile(pathname);
     browser->setFileMode(RemoteFileDialog::AnyFile);
     browser->setAcceptMode(RemoteFileDialog::AcceptSave);
-    QStringList filters{"Vistle files (*.vsl)", "Python files (*.py)", "All files (*)"};
-    browser->setNameFilters(filters);
+    browser->setNameFilters(fileNameFilters);
     browser->setWindowTitle("Save Workflow");
 
     connect(browser, &QDialog::accepted, [this, browser]() {
@@ -681,6 +703,9 @@ void UiController::screenshot(QString imageFile, bool quit)
 }
 void UiController::lockUi(bool locked)
 {
+    if (!locked) {
+        m_mainWindow->dataFlowView()->zoomAll();
+    }
     m_mainWindow->m_moduleBrowser->setEnabled(!locked);
     m_mainWindow->moduleView()->setEnabled(!locked);
     m_mainWindow->setInteractionEnabled(!locked);

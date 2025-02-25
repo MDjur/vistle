@@ -309,12 +309,14 @@ private:
 //! notify that a module has quit
 class V_COREEXPORT ModuleExit: public MessageBase<ModuleExit, MODULEEXIT> {
 public:
-    ModuleExit();
+    ModuleExit(bool crashed = false);
     void setForwarded();
     bool isForwarded() const;
+    bool isCrashed() const;
 
 private:
-    bool forwarded;
+    bool forwarded = false;
+    bool crashed = false;
 };
 
 //! instruct GUI to store a snapshot of the rendered workflow
@@ -563,6 +565,7 @@ public:
     SetParameter(int module, const std::string &name, const StringParamVector &value);
     SetParameter(int module, const std::string &name, const std::string &value);
 
+    void setName(const std::string &name);
     void setInit();
     bool isInitialization() const;
     void setDelayed();
@@ -645,7 +648,11 @@ private:
 
 class V_COREEXPORT Barrier: public MessageBase<Barrier, BARRIER> {
 public:
-    Barrier();
+    Barrier(const std::string &info);
+    const char *info() const;
+
+private:
+    description_t m_info;
 };
 
 class V_COREEXPORT BarrierReached: public MessageBase<BarrierReached, BARRIERREACHED> {
@@ -708,7 +715,8 @@ V_ENUM_OUTPUT_OP(TextType, SendText)
 //! provide information on a GUI item, such as a tooltip for an input or output port
 class V_COREEXPORT ItemInfo: public MessageBase<ItemInfo, ITEMINFO> {
 public:
-    DEFINE_ENUM_WITH_STRING_CONVERSIONS(InfoType, (Module)(Port))
+    DEFINE_ENUM_WITH_STRING_CONVERSIONS(
+        InfoType, (Unspecified)(Module)(Port)(PortType)(PortMapped)(PortGeometry)(PortMapping)(PortSpecies))
 
     struct V_COREEXPORT Payload {
         Payload();

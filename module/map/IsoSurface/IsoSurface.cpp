@@ -52,7 +52,6 @@ IsoSurface::IsoSurface(const std::string &name, int moduleID, mpi::communicator 
 {
     isocontrol.init();
 
-    setDefaultCacheMode(ObjectCache::CacheDeleteLate);
 #ifdef CUTTINGSURFACE
     m_mapDataIn = createInputPort("data_in", "input grid or geometry with mapped data");
 #else
@@ -190,8 +189,9 @@ bool IsoSurface::reduce(int timestep)
         valRank = boost::mpi::all_reduce(comm(), valRank, boost::mpi::minimum<int>());
         if (valRank < m_size) {
             boost::mpi::broadcast(comm(), value, valRank);
-            if (m_pointOrValue->getValue() == PointInFirstStep)
+            if (m_pointOrValue->getValue() == PointInFirstStep || numTimesteps() <= 1) {
                 setParameter(m_isovalue, (Float)value);
+            }
         }
         m_performedPointSearch = true;
     }

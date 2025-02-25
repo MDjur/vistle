@@ -712,6 +712,21 @@ QList<Port *> Module::outputPorts() const
     return m_outPorts;
 }
 
+QList<Port *> Module::ports(PortKind kind) const
+{
+    switch (kind) {
+    case Input:
+        return m_inPorts;
+    case Output:
+        return m_outPorts;
+    case Parameter:
+        return QList<Port *>();
+    }
+
+    return QList<Port *>();
+}
+
+
 QString Module::name() const
 {
     return m_name;
@@ -745,6 +760,8 @@ void Module::updateText()
                 m_displayName = "X";
             if (m_name.startsWith("Thicken"))
                 m_displayName = "Th";
+            if (m_name.startsWith("VortexCriteria"))
+                m_displayName = "Vortex";
             m_displayName += ":" + m_info;
             if (m_displayName.length() > 21) {
                 m_displayName = m_displayName.left(20) + "…";
@@ -980,9 +997,14 @@ void Module::setStatus(Module::Status status)
         toolTip = "Error";
         m_borderColor = Qt::red;
         break;
+    case CRASHED:
+        toolTip = "Crashed";
+        m_color = Qt::darkGray;
+        m_borderColor = Qt::black;
+        break;
     }
 
-    if (m_errorState) {
+    if (m_errorState && m_Status != CRASHED) {
         m_borderColor = Qt::red;
     }
 
@@ -1001,6 +1023,15 @@ void Module::setStatus(Module::Status status)
     update();
 }
 
+void Module::setToolTip(QString text)
+{
+    QString tt = m_name;
+    if (!text.isEmpty()) {
+        tt += "\n" + text;
+    }
+    Base::setToolTip(tt);
+}
+
 void Module::setStatusText(QString text, int prio)
 {
     m_statusText = text;
@@ -1012,7 +1043,7 @@ void Module::setStatusText(QString text, int prio)
     }
 }
 
-void Module::setInfo(QString text)
+void Module::setInfo(QString text, int type)
 {
     m_info = text;
     updateText();

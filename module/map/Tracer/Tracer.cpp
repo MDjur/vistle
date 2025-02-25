@@ -33,7 +33,7 @@ DEFINE_ENUM_WITH_STRING_CONVERSIONS(StartStyle, (Line)(Plane)(Cylinder))
 
 DEFINE_ENUM_WITH_STRING_CONVERSIONS(TraceDirection, (Both)(Forward)(Backward))
 
-DEFINE_ENUM_WITH_STRING_CONVERSIONS(ParticlePlacement, (InitialRank)(RankById))
+DEFINE_ENUM_WITH_STRING_CONVERSIONS(ParticlePlacement, (InitialRank)(RankById)(RankByTimestep)(Rank0))
 
 template<class Value>
 bool agree(const boost::mpi::communicator &comm, const Value &value)
@@ -66,7 +66,6 @@ bool agree(const boost::mpi::communicator &comm, const Value &value)
 
 Tracer::Tracer(const std::string &name, int moduleID, mpi::communicator comm): Module(name, moduleID, comm)
 {
-    setDefaultCacheMode(ObjectCache::CacheDeleteLate);
     setReducePolicy(message::ReducePolicy::PerTimestep);
 
     createInputPort("data_in0", "vector field");
@@ -90,6 +89,8 @@ Tracer::Tracer(const std::string &name, int moduleID, mpi::communicator comm): M
     const char *TracerInteraction::P_TRACE_LEN = "trace_len";
     const char *TracerInteraction::P_FREE_STARTPOINTS = "FreeStartPoints";
 #endif
+
+    m_verbose = addIntParameter("verbose", "verbose output", false, Parameter::Boolean);
 
     m_taskType = addIntParameter("taskType", "task type", Streamlines, Parameter::Choice);
     V_ENUM_SET_CHOICES(m_taskType, TraceType);
@@ -144,8 +145,8 @@ Tracer::Tracer(const std::string &name, int moduleID, mpi::communicator comm): M
         addIntParameter("num_active", "number of particles to trace simultaneously on each node (0: no. of cores)", 0);
     setParameterRange(num_active, (Integer)0, (Integer)10000);
 
-    m_particlePlacement = addIntParameter("particle_placement", "where a particle's data shall be collected", RankById,
-                                          Parameter::Choice);
+    m_particlePlacement = addIntParameter("particle_placement", "where a particle's data shall be collected",
+                                          RankByTimestep, Parameter::Choice);
     V_ENUM_SET_CHOICES(m_particlePlacement, ParticlePlacement);
 
     auto modulus = addIntParameter("cell_index_modulus", "modulus for cell number output", -1);
@@ -248,19 +249,20 @@ bool Tracer::compute()
     }
 
     if (useCelltree) {
+        std::string tname = std::to_string(id()) + "ct:" + name();
         if (unstr) {
-            celltree[t + 1].emplace_back(std::async(std::launch::async, [unstr]() -> Celltree3::const_ptr {
-                setThreadName("Tracer:Celltree");
+            celltree[t + 1].emplace_back(std::async(std::launch::async, [tname, unstr]() -> Celltree3::const_ptr {
+                setThreadName(tname);
                 return unstr->getCelltree();
             }));
         } else if (auto str = StructuredGrid::as(grid)) {
-            celltree[t + 1].emplace_back(std::async(std::launch::async, [str]() -> Celltree3::const_ptr {
-                setThreadName("Tracer:Celltree");
+            celltree[t + 1].emplace_back(std::async(std::launch::async, [tname, str]() -> Celltree3::const_ptr {
+                setThreadName(tname);
                 return str->getCelltree();
             }));
         } else if (auto lg = LayerGrid::as(grid)) {
-            celltree[t + 1].emplace_back(std::async(std::launch::async, [lg]() -> Celltree3::const_ptr {
-                setThreadName("Tracer:Celltree");
+            celltree[t + 1].emplace_back(std::async(std::launch::async, [tname, lg]() -> Celltree3::const_ptr {
+                setThreadName(tname);
                 return lg->getCelltree();
             }));
         }
@@ -462,6 +464,7 @@ bool Tracer::reduce(int timestep)
 
 
     GlobalData global;
+    global.module = this;
     global.int_mode = (IntegrationMethod)getIntParameter("integration");
     global.task_type = (TraceType)getIntParameter("taskType");
     global.dt_step = getFloatParameter("dt_step");
@@ -505,12 +508,25 @@ bool Tracer::reduce(int timestep)
     }
 
     // create particles
-    bool initialrank = m_particlePlacement->getValue() == InitialRank;
+    bool rankById = m_particlePlacement->getValue() == RankById;
     Index id = 0;
     for (int t = 0; t < numtime; ++t) {
         if (timestep != t && timestep != -1)
             continue;
         Index numblocks = size_t(t) + 1 >= grid_in.size() ? 0 : grid_in[t + 1].size();
+
+        int rank = -1;
+        switch (m_particlePlacement->getValue()) {
+        case InitialRank:
+            rank = -1;
+            break;
+        case Rank0:
+            rank = 0;
+            break;
+        case RankByTimestep:
+            rank = t % size();
+            break;
+        }
 
         //create BlockData objects
         global.blocks[t].resize(numblocks + numconstant);
@@ -530,7 +546,8 @@ bool Tracer::reduce(int timestep)
         allParticles.reserve(allParticles.size() + numparticles);
         Index i = 0;
         for (; i < numpoints; i++) {
-            int rank = initialrank ? -1 : i % size();
+            if (rankById)
+                rank = i % size();
             if (traceDirection != Backward) {
                 allParticles.emplace_back(new Particle(id++, rank, i, startpoints[i], true, global, t));
             }
@@ -920,8 +937,12 @@ bool Tracer::reduce(int timestep)
         for (size_t i = 0; i < stopReasonCount.size(); ++i) {
             str << " " << Particle::toString((Particle::StopReason)i) << ":" << stopReasonCount[i];
         }
-        std::string s = str.str();
-        sendInfo("%s", s.c_str());
+        if (m_verbose->getValue() == false) {
+            std::cerr << str.str() << std::endl;
+        } else {
+            std::string s = str.str();
+            sendInfo("%s", s.c_str());
+        }
     }
 
     return true;

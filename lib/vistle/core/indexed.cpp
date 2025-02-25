@@ -110,7 +110,7 @@ Indexed::Celltree::const_ptr Indexed::getCelltree() const
     if (m_celltree)
         return m_celltree;
 
-    Data::mutex_lock_type lock(d()->mutex);
+    Data::mutex_lock_type lock(d()->attachment_mutex);
     if (!hasAttachment("celltree")) {
         refresh();
         createCelltree(getNumElements(), &el()[0], &cl()[0]);
@@ -179,7 +179,7 @@ Indexed::VertexOwnerList::const_ptr Indexed::getVertexOwnerList() const
     if (m_vertexOwnerList)
         return m_vertexOwnerList;
 
-    Data::mutex_lock_type lock(d()->mutex);
+    Data::mutex_lock_type lock(d()->attachment_mutex);
     if (!hasAttachment("vertexownerlist")) {
         refresh();
         createVertexOwnerList();
@@ -256,26 +256,18 @@ void Indexed::createVertexOwnerList() const
     addAttachment("vertexownerlist", vol);
 }
 
-void Indexed::removeVertexOwnerList() const
-{
-    removeAttachment("vertexownerlist");
-}
-
 void Indexed::print(std::ostream &os, bool verbose) const
 {
     Base::print(os);
 
-    os << " cl(";
-    d()->cl->print(os, verbose);
-    os << ")";
+    os << " cl:";
+    d()->cl.print(os, verbose);
 
-    os << " el(";
-    d()->el->print(os, verbose);
-    os << ")";
+    os << " el:";
+    d()->el.print(os, verbose);
 
-    os << " ghost(";
-    d()->ghost->print(os, verbose);
-    os << ")";
+    os << " ghost:";
+    d()->ghost.print(os, verbose);
 }
 
 Indexed::NeighborFinder::NeighborFinder(const Indexed *indexed): indexed(indexed)
@@ -407,6 +399,13 @@ std::pair<Vector3, Vector3> Indexed::elementBounds(Index elem) const
     return std::make_pair(min, max);
 }
 
+Index Indexed::cellNumVertices(Index elem) const
+{
+    const Index *el = &this->el()[0];
+    const Index begin = el[elem], end = el[elem + 1];
+    return end - begin;
+}
+
 std::vector<Index> Indexed::cellVertices(Index elem) const
 {
     const Index *el = &this->el()[0];
@@ -417,7 +416,8 @@ std::vector<Index> Indexed::cellVertices(Index elem) const
 
 Index Indexed::cellNumFaces(Index elem) const
 {
-    return 1;
+    assert("should not be called" == 0);
+    return InvalidIndex;
 }
 
 void Indexed::refreshImpl() const
@@ -434,6 +434,7 @@ void Indexed::refreshImpl() const
     }
     m_numEl = (d && d->el.valid()) ? d->el->size() - 1 : 0;
     m_numCl = (d && d->cl.valid()) ? d->cl->size() : 0;
+    m_celltree = nullptr;
 }
 
 void Indexed::Data::initData()
@@ -485,6 +486,8 @@ void Indexed::resetElements()
 
     d()->ghost = ShmVector<Byte>();
     d()->ghost.construct();
+
+    refreshImpl();
 }
 
 Index Indexed::getNumCorners()
@@ -501,6 +504,8 @@ void Indexed::resetCorners()
 {
     d()->cl = ShmVector<Index>();
     d()->cl.construct();
+
+    refreshImpl();
 }
 
 Object::Type Indexed::type()

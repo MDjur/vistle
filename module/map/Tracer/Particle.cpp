@@ -25,8 +25,8 @@ Particle::Particle(Index id, int rank, Index startId, const Vector3 &pos, bool f
 , m_x(pos)
 , m_xold(pos)
 , m_v(Vector3(std::numeric_limits<Scalar>::max(), 0, 0))
-, // keep large enough so that particle moves initially
-m_p(0)
+// keep large enough so that particle moves initially
+, m_p(0)
 , m_stp(0)
 , m_time(0)
 , m_dist(0)
@@ -95,7 +95,9 @@ void Particle::startTracing()
     assert(inGrid());
     m_tracing = true;
     m_progressFuture = std::async(std::launch::async, [this]() -> bool {
-        setThreadName("Tracer:Particle:" + std::to_string(id()));
+        std::string tname =
+            std::to_string(m_global.module->id()) + "p" + std::to_string(id()) + ":" + m_global.module->name();
+        setThreadName(tname);
         return trace();
     });
 }

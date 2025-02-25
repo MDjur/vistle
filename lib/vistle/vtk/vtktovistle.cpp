@@ -78,7 +78,7 @@ bool subCellCoordinatesFromId(int &i, int &j, int &k, int subId, const int order
 std::array<Index, UnstructuredGrid::NumVertices[UnstructuredGrid::HEXAHEDRON]> approximateSubHex(int subId,
                                                                                                  const int order[])
 {
-    int i, j, k;
+    int i = 0, j = 0, k = 0;
     if (!subCellCoordinatesFromId(i, j, k, subId, order)) {
         std::cerr << "subCellCoordinatesFromId failed" << std::endl;
     }
@@ -178,9 +178,12 @@ Object::ptr vtkUGrid2Vistle(vtkUnstructuredGrid *vugrid, std::string &diagnostic
             typelist[elemVistle] = UnstructuredGrid::POINT;
             break;
         case VTK_LINE:
-        case VTK_POLY_LINE:
             haveDim[1] = true;
             typelist[elemVistle] = UnstructuredGrid::BAR;
+            break;
+        case VTK_POLY_LINE:
+            haveDim[1] = true;
+            typelist[elemVistle] = UnstructuredGrid::POLYLINE;
             break;
         case VTK_TRIANGLE:
             haveDim[2] = true;
@@ -279,19 +282,12 @@ Object::ptr vtkUGrid2Vistle(vtkUnstructuredGrid *vugrid, std::string &diagnostic
             auto lagrangeCell = dynamic_cast<vtkLagrangeHexahedron *>(vugrid->GetCell(i));
             lagrangeConnectivityToLinearHexahedron(lagrangeCell->GetOrder(), pts, connlist);
             assert(connlist.size() == 8 * (elemVistle + 1));
-        } else if (vugrid->GetCellType(i) == VTK_PIXEL) {
+        } else if (vugrid->GetCellType(i) == VTK_PIXEL || vugrid->GetCellType(i) == VTK_VOXEL) {
             // account for different order
-            Index vtkPixelOrder[] = {0, 1, 3, 2};
+            constexpr Index vtkOrder[] = {0, 1, 3, 2, 4, 5, 7, 6};
             for (vtkIdType j = 0; j < npts; ++j) {
                 assert(pts[j] >= 0);
-                connlist.emplace_back(pts[vtkPixelOrder[j]]);
-            }
-        } else if (vugrid->GetCellType(i) == VTK_VOXEL) {
-            // account for different order
-            Index vtkVoxelOrder[] = {0, 1, 3, 2, 4, 5, 7, 6};
-            for (vtkIdType j = 0; j < npts; ++j) {
-                assert(pts[j] >= 0);
-                connlist.emplace_back(pts[vtkVoxelOrder[j]]);
+                connlist.emplace_back(pts[vtkOrder[j]]);
             }
         } else {
             for (vtkIdType j = 0; j < npts; ++j) {
@@ -608,9 +604,6 @@ DataBase::ptr vtkArray2Vistle(vtkType *vd, Object::const_ptr grid)
     return nullptr;
 }
 
-#ifdef SENSEI
-} // anonymous namespace
-#endif
 DataBase::ptr vtkData2Vistle(vtkDataArray *varr, Object::const_ptr grid, std::string &diag)
 {
     DataBase::ptr data;
@@ -673,10 +666,7 @@ DataBase::ptr vtkData2Vistle(vtkDataArray *varr, Object::const_ptr grid, std::st
     return nullptr;
 }
 
-
-#ifndef SENSEI
 } // anonymous namespace
-#endif
 
 vistle::Object::ptr toGrid(vtkDataObject *vtk, std::string *diagnostics)
 {

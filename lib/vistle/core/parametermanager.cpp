@@ -48,6 +48,7 @@ void ParameterManager::init()
 void ParameterManager::quit()
 {
     std::vector<std::string> toRemove;
+    toRemove.reserve(m_parameters.size());
     for (auto &param: m_parameters) {
         if (param.second.owner)
             toRemove.push_back(param.second.param->getName());
@@ -191,10 +192,21 @@ void ParameterManager::setName(const std::string &name)
     m_name = name;
 }
 
-void ParameterManager::applyDelayedChanges()
+bool ParameterManager::applyDelayedChanges()
 {
-    changeParameters(m_delayedChanges);
-    m_delayedChanges.clear();
+    decltype(m_delayedChanges) delayedChanges;
+    std::swap(m_delayedChanges, delayedChanges);
+    if (m_inApplyDelayedChanges) {
+        if (delayedChanges.empty()) {
+            return true;
+        }
+        return changeParameters(delayedChanges);
+    }
+
+    m_inApplyDelayedChanges = true;
+    bool ret = changeParameters(delayedChanges);
+    m_inApplyDelayedChanges = false;
+    return ret;
 }
 
 Parameter *ParameterManager::addParameterGeneric(const std::string &name, std::shared_ptr<Parameter> param)
@@ -281,6 +293,7 @@ void ParameterManager::setParameterChoices(const std::string &name, const std::v
 
 void ParameterManager::setParameterChoices(Parameter *param, const std::vector<std::string> &choices)
 {
+    param->setChoices(choices);
     message::SetParameterChoices sc(param->getName(), choices.size());
     sc.setDestId(message::Id::ForBroadcast);
     message::SetParameterChoices::Payload pl(choices);
@@ -311,10 +324,20 @@ V getParameterDefault(config::Access *config, const std::string &module, const s
     if (name.find("_config:") == 0) // avoid recursive default look-up for config parameters
         return value;
 
-    auto def = config->value<V>("modules/default", module, name, value);
-    if (!def->exists() && !name.empty() && name[0] == '_') {
-        // look up common default for system parameters
-        def = config->value<V>("modules/default", "ALL", name, value);
+    auto def = config->value<V>("modules/parameters", module, name, value);
+    if (!name.empty() && name[0] == '_') {
+        if (!def->exists()) {
+            // look up defaults for system parameters
+            def = config->value<V>("modules/default", module, name, value);
+        }
+        if (!def->exists()) {
+            // global user overrides for system parameters
+            def = config->value<V>("modules/parameters", "ALL", name, value);
+        }
+        if (!def->exists()) {
+            // look up common default for system parameters
+            def = config->value<V>("modules/default", "ALL", name, value);
+        }
     }
     return def->value();
 }
@@ -337,6 +360,7 @@ ParameterVector<V> getParameterDefault(config::Access *config, const std::string
         return value;
 
     ParameterVector<V> val;
+    val.reserve(def->size());
     for (size_t i = 0; i < def->size(); ++i) {
         val.push_back((*def)[i]);
     }
@@ -528,8 +552,6 @@ bool ParameterManager::parameterChangedWrapper(const Parameter *p)
         return true;
     }
     m_inParameterChanged = true;
-
-    applyDelayedChanges();
 
     bool ret = changeParameter(p);
     m_inParameterChanged = false;

@@ -5,6 +5,7 @@
 #include <atomic>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/process.hpp>
+#include <boost/program_options.hpp>
 #include <vistle/core/statetracker.h>
 #include <vistle/util/buffer.h>
 #include "uimanager.h"
@@ -49,6 +50,7 @@ public:
     typedef std::shared_ptr<socket> socket_ptr;
 
     static Hub &the();
+    static boost::program_options::options_description &options();
 
     Hub(bool inManager = false);
     ~Hub();
@@ -140,7 +142,7 @@ private:
     std::string m_masterHost;
     std::string m_conferenceUrl;
     std::string m_sessionUrl;
-    boost::asio::io_service m_ioService;
+    boost::asio::io_context m_ioContext;
     std::shared_ptr<acceptor> m_acceptorv4, m_acceptorv6;
 
     std::mutex m_socketMutex; // protect access to m_sockets and m_clients
@@ -197,6 +199,8 @@ private:
     bool m_barrierActive;
     unsigned m_barrierReached;
     message::uuid_t m_barrierUuid;
+    typedef std::set<int> ModuleSet;
+    ModuleSet m_reachedSet;
 
     std::string m_statusText;
 
@@ -214,6 +218,7 @@ private:
     bool handlePriv(const message::FileQueryResult &result, const buffer *payload);
     bool handlePriv(const message::Cover &cover, const buffer *payload);
     bool handlePriv(const message::ModuleExit &exit);
+    bool handlePriv(const message::Kill &kill);
     bool handlePriv(const message::Spawn &spawn);
     bool handlePriv(const message::LoadWorkflow &load);
     bool handlePriv(const message::SaveWorkflow &save);
@@ -229,6 +234,7 @@ private:
     bool spawnMirror(int hubId, const std::string &name, int mirroredId);
     std::mutex m_queueMutex; // protect access to m_queue
     std::vector<message::Buffer> m_queue;
+    void queueMessage(const message::Buffer &msg);
     bool handleQueue();
     bool updateQueue(int oldId, int newId);
     bool cleanQueue(int exitedId);
@@ -240,11 +246,7 @@ private:
     void updateLinkedParameters(const message::SetParameter &setParam);
     std::map<int, std::vector<message::Buffer>> m_sendAfterExit, m_sendAfterSpawn;
 
-#if BOOST_VERSION >= 106600
     boost::asio::executor_work_guard<boost::asio::io_context::executor_type> m_workGuard;
-#else
-    std::shared_ptr<boost::asio::io_service::work> m_workGuard;
-#endif
     std::vector<std::thread> m_ioThreads;
     std::vector<std::thread> m_vrbThreads;
     void startIoThread();
@@ -257,6 +259,8 @@ private:
     std::map<vistle::message::AddHub, std::future<bool>> m_outstandingDataConnections;
 
     std::unique_ptr<PythonInterpreter> m_python;
+
+    void initiateQuit();
 };
 
 } // namespace vistle

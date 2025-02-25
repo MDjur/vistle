@@ -1,5 +1,4 @@
 vistle_find_package(LZ4)
-vistle_find_package(SNAPPY)
 #vistle_find_package(ZSTD)
 
 set(core_SOURCES
@@ -153,6 +152,7 @@ set(core_HEADERS
     uniformgrid.h
     uniformgrid_impl.h
     unstr.h
+    unstr_geo.h
     unstr_impl.h
     uuid.h
     vec.h
@@ -194,6 +194,7 @@ vistle_target_link_libraries(
     PUBLIC
     vtkm::cont)
 target_link_libraries(vistle_core PRIVATE vistle_config)
+target_link_libraries(vistle_core PUBLIC Eigen3::Eigen)
 
 if(ZFP_FOUND)
     target_compile_definitions(vistle_core PRIVATE HAVE_ZFP)
@@ -217,12 +218,6 @@ if(LZ4_FOUND)
     target_compile_definitions(vistle_core PRIVATE HAVE_LZ4)
     target_include_directories(vistle_core SYSTEM PRIVATE ${LZ4_INCLUDE_DIRS})
     vistle_target_link_libraries(vistle_core PRIVATE ${LZ4_LIBRARIES})
-endif()
-
-if(SNAPPY_FOUND)
-    target_compile_definitions(vistle_core PRIVATE HAVE_SNAPPY)
-    target_include_directories(vistle_core SYSTEM PRIVATE ${SNAPPY_INCLUDE_DIRS})
-    vistle_target_link_libraries(vistle_core PRIVATE ${SNAPPY_LIBRARIES})
 endif()
 
 target_include_directories(vistle_core SYSTEM PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/lib/3rdparty>)

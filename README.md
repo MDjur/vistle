@@ -1,5 +1,6 @@
 [![Build status](https://github.com/vistle/vistle/workflows/CMake/badge.svg)](https://github.com/vistle/vistle/actions?query=workflow%3ACMake)
 
+
 Vistle - A Modular Data-Parallel Visualization System
 =====================================================
 
@@ -42,7 +43,7 @@ Installation
 - **C++ compiler**:
   support for C++14 (ISO/IEC 14882:2014) is required,
   known good compilers:
-    - GCC (8-13)
+    - GCC (8-14)
     - Clang (Xcode 14, 15)
     - Microsoft Visual Studio 2022
 
@@ -53,16 +54,16 @@ Installation
   Microsoft MPI, Open MPI, MPICH and MVAPICH2 has been used successfully.
 
 - **Boost**:
-  At least 1.59.00 is required.
-     Notes:
+  At least 1.66.00 is required.
+     Note:
      - in order to switch MPI implementations without requiring a recompilation of Boost, we compile Boost.MPI together with Vistle
 
 - Botan:
   [Crypto and TLS for Modern C++](https://botan.randombit.net/) is used for verifying HMACs during connection establishment,
-  version 1, 2 or 3 should work
+  version 2 or 3 should work
 
 - **Python**:
-  for interpreting Vistle scripts (.vsl), Python 3 should work.
+  for interpreting Vistle workflow scripts (.vsl), Python 3 should work.
 
 - **COVISE/OpenCOVER**:
   OpenCOVER or a version of COVISE including OpenCOVER compiled by you is necessary, get it from
@@ -76,8 +77,8 @@ Installation
   the version of OpenSceneGraph that was used for compiling OpenCOVER
 
 - **Qt**:
-  The Qt 5 libraries `Qt5Core`, `Qt5Widgets` and `Qt5Gui` are required by the graphical user interface,
-  alternatively also Qt 6 can be used.
+  The Qt 6 libraries `Qt6Core`, `Qt6Widgets` and `Qt6Gui` are required by the graphical user interface,
+  alternatively also Qt 5 can be used.
 
 You can set the environment variable `EXTERNLIBS` to a directory where Vistle should search for 3rd party libraries. It will search in e.g. `$EXTERNLIBS/boost`, if CMake is looking for `Boost`.
 
@@ -179,8 +180,8 @@ Source Code Organization
         - `module/render/DisCOVERay`: a parallel remote hybrid rendering server based on [Embree](https://www.embree.org) (CPU ray-casting)
         - `module/render/OsgRenderer`: a parallel remote hybrid rendering server based on OpenSceneGraph (OpenGL)
         - `module/render/COVER`: wrap OpenCOVER as a render module
-            - `module/render/COVER/plugins`: plugins for OpenCOVER, e.g. for connecting to Vistle
-                - `module/render/COVER/plugins/RhrClient`: OpenCOVER remote hybrid rendering client plugin
+            - `module/render/COVER/plugin`: plug-ins for OpenCOVER, e.g. for connecting to Vistle
+                - `module/render/COVER/plugin/RhrClient`: OpenCOVER remote hybrid rendering client plugin
 
 Documentation
 -------------

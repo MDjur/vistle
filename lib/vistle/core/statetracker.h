@@ -42,6 +42,7 @@ public:
         Quit = 8,
         Busy = 16,
         Executing = 32,
+        Crashed = 64,
     };
     virtual void moduleStateChanged(int moduleId, int stateBits);
 
@@ -118,6 +119,7 @@ public:
     mutex &getMutex();
     void lock();
     void unlock();
+    bool quitting() const;
 
     void setId(int id);
 
@@ -128,7 +130,7 @@ public:
     std::vector<int> getSlaveHubs() const;
     const std::string &hubName(int id) const;
     std::vector<int> getRunningList() const;
-    int getNumRunning() const;
+    unsigned getNumRunning() const;
     std::vector<int> getBusyList() const;
     int getHub(int id) const;
     const HubData &getHubData(int id) const;
@@ -197,6 +199,8 @@ public:
 
     std::set<int> getConnectedModules(ConnectionKind kind, int id, const std::string &port = std::string()) const;
 
+    std::string barrierInfo(const message::uuid_t &uuid) const;
+
 protected:
     std::shared_ptr<message::Buffer> removeRequest(const message::uuid_t &uuid);
     bool registerReply(const message::uuid_t &uuid, const message::Message &msg);
@@ -213,6 +217,7 @@ protected:
         bool killed = false;
         bool busy = false;
         bool executing = false;
+        bool crashed = false;
         std::string name;
         ParameterMap parameters;
         ParameterOrder paramOrder;
@@ -342,6 +347,9 @@ private:
     int m_workflowLoader = message::Id::Invalid;
     std::string m_loadedWorkflowFile;
     std::string m_sessionUrl;
+
+    std::map<message::uuid_t, std::string> m_barriers;
+    bool m_quitting = false;
 };
 
 } // namespace vistle

@@ -27,8 +27,6 @@ DEFINE_ENUM_WITH_STRING_CONVERSIONS(PointOrValue, (PointPerTimestep)(Value)(Poin
 IsoSurfaceVtkm::IsoSurfaceVtkm(const std::string &name, int moduleID, mpi::communicator comm)
 : Module(name, moduleID, comm)
 {
-    setDefaultCacheMode(ObjectCache::CacheDeleteLate);
-
     createInputPort("data_in", "input gird or geometry with scalar data");
     m_mapDataIn = createInputPort("mapdata_in", "additional mapped field");
     m_dataOut = createOutputPort("data_out", "surface with mapped data");
@@ -115,9 +113,9 @@ bool IsoSurfaceVtkm::reduce(int timestep)
     lock.unlock();
     if ((m_pointOrValue->getValue() == PointInFirstStep && !m_performedPointSearch && timestep <= 0) ||
         m_pointOrValue->getValue() == PointPerTimestep) {
-        int found = 0;
         const int numBlocks = blocks.size();
-#pragma omp parallel for
+        int found = 0;
+#pragma omp parallel for firstprivate(value) lastprivate(value) reduction(+ : found)
         for (int i = 0; i < numBlocks; ++i) {
             const auto &b = blocks[i];
             auto gi = b.grid->getInterface<GridInterface>();
@@ -146,8 +144,9 @@ bool IsoSurfaceVtkm::reduce(int timestep)
         valRank = boost::mpi::all_reduce(comm(), valRank, boost::mpi::minimum<int>());
         if (valRank < m_size) {
             boost::mpi::broadcast(comm(), value, valRank);
-            if (m_pointOrValue->getValue() == PointInFirstStep)
+            if (m_pointOrValue->getValue() == PointInFirstStep || numTimesteps() <= 1) {
                 setParameter(m_isovalue, (Float)value);
+            }
         }
         m_performedPointSearch = true;
     }

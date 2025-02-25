@@ -21,7 +21,7 @@
 #include <vistle/core/vector.h>
 #include <vistle/core/message.h>
 #include <vistle/core/messagesender.h>
-#include <vistle/renderer/renderobject.h>
+#include <vistle/renderer/renderobject.h> // just for the definition of an enum
 
 #include "export.h"
 #include "compdecomp.h"
@@ -32,7 +32,6 @@ namespace vistle {
 namespace asio = boost::asio;
 using message::RemoteRenderMessage;
 class MessageSender;
-class Module;
 struct EncodeTask;
 
 //! Implement remote hybrid rendering server
@@ -42,7 +41,7 @@ public:
     typedef asio::ip::tcp::acceptor acceptor;
     typedef asio::ip::address address;
 
-    explicit RhrServer(vistle::Module *module);
+    RhrServer();
     ~RhrServer();
 
     int numClients() const;
@@ -241,7 +240,7 @@ public:
                    const std::vector<std::string> &removed);
 
 private:
-    asio::io_service m_io;
+    asio::io_context m_io;
     asio::ip::tcp::acceptor m_acceptorv4, m_acceptorv6;
     bool m_listen = false;
     std::shared_ptr<asio::ip::tcp::socket> m_clientSocket;

@@ -156,7 +156,8 @@ ReadSeisSol::ReadSeisSol(const std::string &name, int moduleID, mpi::communicato
 : vistle::Reader(name, moduleID, comm)
 {
     //settings
-    m_file = addStringParameter("file", "XDMF File", "/path/to/XDMF_File", Parameter::Filename);
+    m_file = addStringParameter("file", "XDMF File", "/path/to/XDMF_File", Parameter::ExistingFilename);
+    setParameterFilters(m_file, {"XDMF Files(*.xdmf)"});
     m_seisMode = addIntParameter("SeisSolMode", "Select file format", (Integer)XDMF, Parameter::Choice);
     V_ENUM_SET_CHOICES(m_seisMode, SeisSolMode);
     m_parallelMode =
@@ -239,8 +240,8 @@ void ReadSeisSol::releaseXdmfObjects()
   */
 void ReadSeisSol::clearChoice()
 {
-    for (const auto &att: m_attributes)
-        att->setChoices(std::vector<std::string>());
+    for (auto &att: m_attributes)
+        setParameterChoices(att, std::vector<std::string>());
 
     m_attChoiceStr.clear();
 }

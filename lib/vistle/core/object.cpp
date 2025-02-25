@@ -350,12 +350,25 @@ Object::ptr Object::cloneType() const
 void Object::refresh() const
 {}
 
+namespace {
+bool isAttachment(Object::Type type)
+{
+    switch (type) {
+    case Object::VERTEXOWNERLIST:
+    case Object::CELLTREE1:
+    case Object::CELLTREE2:
+    case Object::CELLTREE3:
+        return true;
+    default:
+        return false;
+    }
+}
+} // namespace
+
 bool Object::check(std::ostream &os, bool quick) const
 {
     VALIDATE(d()->refcount() > 0); // we are holding a reference
     VALIDATE(d()->isComplete()); // we are holding a reference
-
-    VALIDATE(d()->meta.creator() != -1);
 
     bool terminated = false;
     for (size_t i = 0; i < sizeof(shm_name_t); ++i) {
@@ -368,21 +381,25 @@ bool Object::check(std::ostream &os, bool quick) const
 
     VALIDATE(d()->type > UNKNOWN);
 
-    VALIDATE(d()->meta.numTimesteps() >= -1);
-    VALIDATE(d()->meta.timeStep() >= -1);
-    VALIDATE(d()->meta.numTimesteps() == -1 ||
-             (d()->meta.timeStep() >= 0 && d()->meta.timeStep() < d()->meta.numTimesteps()));
+    if (!isAttachment(getType())) {
+        VALIDATE(d()->meta.creator() != -1);
 
-    VALIDATE(d()->meta.animationStep() >= -1);
-    VALIDATE(d()->meta.animationStep() < d()->meta.numAnimationSteps() || d()->meta.numAnimationSteps() == -1);
+        VALIDATE(d()->meta.numTimesteps() >= -1);
+        VALIDATE(d()->meta.timeStep() >= -1);
+        VALIDATE(d()->meta.numTimesteps() == -1 ||
+                 (d()->meta.timeStep() >= 0 && d()->meta.timeStep() < d()->meta.numTimesteps()));
 
-    VALIDATE(d()->meta.iteration() >= -1);
+        VALIDATE(d()->meta.animationStep() >= -1);
+        VALIDATE(d()->meta.animationStep() < d()->meta.numAnimationSteps() || d()->meta.numAnimationSteps() == -1);
 
-    VALIDATE(d()->meta.numBlocks() >= -1);
-    VALIDATE(d()->meta.block() >= -1);
-    VALIDATE(d()->meta.numBlocks() == -1 || (d()->meta.block() >= 0 && d()->meta.block() < d()->meta.numBlocks()));
+        VALIDATE(d()->meta.iteration() >= -1);
 
-    VALIDATE(d()->meta.generation() >= -1);
+        VALIDATE(d()->meta.numBlocks() >= -1);
+        VALIDATE(d()->meta.block() >= -1);
+        VALIDATE(d()->meta.numBlocks() == -1 || (d()->meta.block() >= 0 && d()->meta.block() < d()->meta.numBlocks()));
+
+        VALIDATE(d()->meta.generation() >= -1);
+    }
 
     if (quick)
         return true;
@@ -427,12 +444,14 @@ int ObjectData::ref() const
 
 int ObjectData::unref() const
 {
-    Shm::the().lockObjects();
-    int ref = ShmData::unref();
-    if (ref == 0) {
-        ObjectTypeRegistry::getDestroyer(type)(name);
-    }
-    Shm::the().unlockObjects();
+    int ref = 0;
+    auto lambda = [this, &ref]() {
+        ref = ShmData::unref();
+        if (ref == 0) {
+            ObjectTypeRegistry::getDestroyer(type)(name);
+        }
+    };
+    Shm::the().atomicFunc(lambda);
     return ref;
 }
 
@@ -619,6 +638,7 @@ void Object::Data::setAttributeList(const std::string &key, const std::vector<st
         attributes.insert(AttributeMapValueType(skey, AttributeList(Shm::the().allocator())));
     AttributeList &a = res.first->second;
     a.clear();
+    a.reserve(values.size());
     for (size_t i = 0; i < values.size(); ++i) {
         a.emplace_back(values[i].c_str(), Shm::the().allocator());
     }
@@ -639,6 +659,7 @@ void Object::Data::copyAttributes(const ObjectData *src, bool replace)
                 AttributeList &dest = res.first->second;
                 if (replace)
                     dest.clear();
+                dest.reserve(dest.size() + values.size());
                 for (AttributeList::const_iterator ait = values.begin(); ait != values.end(); ++ait) {
                     dest.emplace_back(*ait);
                 }
@@ -675,6 +696,7 @@ std::vector<std::string> Object::Data::getAttributes(const std::string &key) con
     const AttributeList &a = it->second;
 
     std::vector<std::string> attrs;
+    attrs.reserve(a.size());
     for (AttributeList::const_iterator i = a.begin(); i != a.end(); ++i) {
         attrs.push_back(i->c_str());
     }
@@ -684,6 +706,7 @@ std::vector<std::string> Object::Data::getAttributes(const std::string &key) con
 std::vector<std::string> Object::Data::getAttributeList() const
 {
     std::vector<std::string> result;
+    result.reserve(attributes.size());
     for (AttributeMap::const_iterator it = attributes.begin(); it != attributes.end(); ++it) {
         auto key = it->first;
         result.push_back(key.c_str());
@@ -692,12 +715,12 @@ std::vector<std::string> Object::Data::getAttributeList() const
 }
 
 #ifdef NO_SHMEM
-std::recursive_mutex &Object::mutex() const
+std::recursive_mutex &Object::attachmentMutex() const
 #else
-boost::interprocess::interprocess_recursive_mutex &Object::mutex() const
+boost::interprocess::interprocess_recursive_mutex &Object::attachmentMutex() const
 #endif
 {
-    return d()->mutex;
+    return d()->attachment_mutex;
 }
 
 bool Object::addAttachment(const std::string &key, Object::const_ptr obj) const
@@ -727,7 +750,7 @@ bool Object::removeAttachment(const std::string &key) const
 
 bool Object::Data::hasAttachment(const std::string &key) const
 {
-    mutex_lock_type lock(mutex);
+    mutex_lock_type lock(attachment_mutex);
     const Key skey(key.c_str(), Shm::the().allocator());
     AttachmentMap::const_iterator it = attachments.find(skey);
     return it != attachments.end();
@@ -735,7 +758,7 @@ bool Object::Data::hasAttachment(const std::string &key) const
 
 Object::const_ptr ObjectData::getAttachment(const std::string &key) const
 {
-    mutex_lock_type lock(mutex);
+    mutex_lock_type lock(attachment_mutex);
     const Key skey(key.c_str(), Shm::the().allocator());
     AttachmentMap::const_iterator it = attachments.find(skey);
     if (it == attachments.end()) {
@@ -747,7 +770,7 @@ Object::const_ptr ObjectData::getAttachment(const std::string &key) const
 bool Object::Data::addAttachment(const std::string &key, Object::const_ptr obj)
 {
     {
-        mutex_lock_type lock(mutex);
+        mutex_lock_type lock(attachment_mutex);
         const Key skey(key.c_str(), Shm::the().allocator());
         AttachmentMap::const_iterator it = attachments.find(skey);
         if (it != attachments.end()) {
@@ -763,7 +786,7 @@ bool Object::Data::addAttachment(const std::string &key, Object::const_ptr obj)
 
 void Object::Data::copyAttachments(const ObjectData *src, bool replace)
 {
-    mutex_lock_type lock(mutex);
+    mutex_lock_type lock(attachment_mutex);
     const AttachmentMap &a = src->attachments;
 
     for (AttachmentMap::const_iterator it = a.begin(); it != a.end(); ++it) {
@@ -785,7 +808,7 @@ void Object::Data::copyAttachments(const ObjectData *src, bool replace)
 
 bool Object::Data::removeAttachment(const std::string &key)
 {
-    mutex_lock_type lock(mutex);
+    mutex_lock_type lock(attachment_mutex);
     const Key skey(key.c_str(), Shm::the().allocator());
     AttachmentMap::iterator it = attachments.find(skey);
     if (it == attachments.end()) {

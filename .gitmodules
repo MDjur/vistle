@@ -14,9 +14,6 @@
 	path = lib/3rdparty/boost-mpi
 	url = https://github.com/boostorg/mpi.git
 	branch = master
-[submodule "3rdparty/boost-mpi-1.60"]
-	path = lib/3rdparty/boost-mpi-1.60
-	url = https://github.com/boostorg/mpi.git
 [submodule "3rdparty/boost-mpi-1.69"]
 	path = lib/3rdparty/boost-mpi-1.69
 	url = https://github.com/boostorg/mpi.git
@@ -67,8 +64,6 @@
 [submodule "module/geometry/DelaunayTriangulator/tetgen"]
 	path = module/geometry/DelaunayTriangulator/tetgen
 	url = https://github.com/vistle/tetgen.git
-[submodule "sz3"]
-	url = https://github.com/szcompressor/SZ3.git
 [submodule "lib/3rdparty/vtk-m"]
 	path = lib/3rdparty/vtk-m
 	url = https://gitlab.kitware.com/vtk/vtk-m.git
@@ -81,3 +76,6 @@
 [submodule "lib/3rdparty/profile_nvtx"]
 	path = lib/3rdparty/profile_nvtx
 	url = https://github.com/NVIDIA/NVTX
+[submodule "module/read/ReadCsv/fast-cpp-csv-parser"]
+	path = module/read/ReadCsv/fast-cpp-csv-parser
+	url = https://github.com/ben-strasser/fast-cpp-csv-parser.git

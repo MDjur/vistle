@@ -35,7 +35,7 @@ class Module: public QObject, public QGraphicsRectItem {
     static bool s_snapToGrid;
 
 public:
-    enum Status { SPAWNING, INITIALIZED, KILLED, BUSY, EXECUTING, ERROR_STATUS };
+    enum Status { SPAWNING, INITIALIZED, KILLED, BUSY, EXECUTING, ERROR_STATUS, CRASHED };
 
     struct Message {
         int type;
@@ -58,7 +58,7 @@ public:
     QPointF portPos(const Port *port) const;
     void setStatus(Module::Status status);
     void setStatusText(QString text, int prio);
-    void setInfo(QString text);
+    void setInfo(QString text, int type);
     void clearMessages();
     void moduleMessage(int type, QString message);
     QList<Message> &messages();
@@ -69,6 +69,8 @@ public:
     void removePort(const vistle::Port &port);
     QList<Port *> inputPorts() const;
     QList<Port *> outputPorts() const;
+    enum PortKind { Input, Output, Parameter };
+    QList<Port *> ports(PortKind kind) const;
 
     // vistle methods
     QString name() const;
@@ -135,6 +137,7 @@ private:
     void updateText();
     void doLayout();
     void sendSpawn(int hub, const std::string &module, vistle::message::Spawn::ReferenceType type);
+    void setToolTip(QString text);
 
     QMenu *m_moduleMenu = nullptr;
     QAction *m_selectUpstreamAct = nullptr, *m_selectDownstreamAct = nullptr, *m_selectConnectedAct = nullptr;

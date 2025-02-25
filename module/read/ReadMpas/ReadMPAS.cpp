@@ -63,7 +63,7 @@ static std::mutex pnetcdf_mutex; // avoid simultaneous access to PnetCDF library
 #endif
 
 #define MAX_EDGES 6 // maximal edges on cell
-#define MSL 6371229.0 //sphere radius on mean sea level (earth radius)
+#define MSL 6378137 //6371229.0 //sphere radius on mean sea level (earth radius)
 #define MAX_VERT 3 // vertex degree
 
 static const char *DimNCells = "nCells";
@@ -85,16 +85,16 @@ DEFINE_ENUM_WITH_STRING_CONVERSIONS(CellMode, (Voronoi)(Delaunay)(DelaunayProjec
 ReadMPAS::ReadMPAS(const std::string &name, int moduleID, mpi::communicator comm): Reader(name, moduleID, comm)
 {
     m_gridFile = addStringParameter("grid_file", "File containing the grid", "", Parameter::ExistingFilename);
-    setParameterFilters(m_gridFile, "NetCDF Grid Files (*.grid.nc)/NetCDF Files (*.nc)/All Files (*)");
+    setParameterFilters(m_gridFile, "NetCDF Grid Files (*.grid.nc)/NetCDF Files (*.nc)");
     m_zGridFile = addStringParameter("zGrid_file_dir",
                                      "File containing the vertical coordinates (elevation of cell from mean sea level",
                                      "", Parameter::ExistingFilename);
-    setParameterFilters(m_zGridFile, "NetCDF Vertical Coordinate Files (zgrid*.nc)/NetCDF Files (*.nc)/All Files (*)");
+    setParameterFilters(m_zGridFile, "NetCDF Vertical Coordinate Files (zgrid*.nc)/NetCDF Files (*.nc)");
     m_dataFile = addStringParameter("data_file", "File containing data", "", Parameter::ExistingFilename);
-    setParameterFilters(m_dataFile, "NetCDF History Files (history.*.nc)/NetCDF Files (*.nc)/All Files (*)");
+    setParameterFilters(m_dataFile, "NetCDF History Files (history.*.nc)/NetCDF Files (*.nc)");
     m_partFile =
         addStringParameter("part_file", "File containing the grid partitions", "", Parameter::ExistingFilename);
-    setParameterFilters(m_partFile, "Partitioning Files (*.part.*)/All Files (*)");
+    setParameterFilters(m_partFile, "Partitioning Files (*.part.*)");
 
     m_numPartitions = addIntParameter("numParts", "Number of partitions (-1: automatic)", -1);
     m_numLevels = addIntParameter("numLevels", "Number of vertical cell layers to read (0: only one 2D level)", 0);
@@ -172,12 +172,12 @@ bool ReadMPAS::prepareRead()
     }
 
     //set partitions
-    int numPartsUser = 1;
+    size_t numPartsUser = 1;
     std::string sPartFile = m_partFile->getValue();
     if (sPartFile.empty()) {
         sendWarning("No partitioning file given: continue with single block");
     } else {
-        numPartsUser = m_numPartitions->getValue();
+        numPartsUser = std::max<int>(0, m_numPartitions->getValue());
     }
 
     partsPath = "";
@@ -188,7 +188,7 @@ bool ReadMPAS::prepareRead()
         if (fs::is_regular_file(path)) {
             std::string fEnd = path.extension().string();
             boost::erase_all(fEnd, ".");
-            numPartsFile = atoi(fEnd.c_str());
+            numPartsFile = std::max<int>(0, atoi(fEnd.c_str()));
         }
     } catch (std::exception &ex) {
         std::cerr << "exception: " << ex.what();
@@ -252,7 +252,7 @@ bool ReadMPAS::prepareRead()
             fs::path dataDir(dataFilePath.parent_path());
             for (fs::directory_iterator it2(dataDir); it2 != fs::directory_iterator(); ++it2) { //all files in dir
                 if ((it2->path().extension() == ".nc") && (strncmp(dataFilePath.filename().string().c_str(),
-                                                                   it2->path().filename().string().c_str(), 15) == 0)) {
+                                                                   it2->path().filename().string().c_str(), 10) == 0)) {
                     auto fn = it2->path().string();
 #ifdef USE_NETCDF
                     auto ncid = NcFile::open(fn, comm());
@@ -759,7 +759,7 @@ bool ReadMPAS::readVariable(Reader::Token &token, int timestep, int block, Index
 
 #ifdef USE_NETCDF
 #else
-    dataValues->reserve(numCells * nLevels);
+    dataValues->resize(numCells * nLevels);
 #endif
     auto ft =
         velocity ? m_3dChoices[pVar] : (m_varDim->getValue() == varDimList[0] ? m_2dChoices[pVar] : m_3dChoices[pVar]);
@@ -839,7 +839,7 @@ bool ReadMPAS::read(Reader::Token &token, int timestep, int block)
 
         size_t numLevelsUser = m_numLevels->getValue();
         size_t bottomLevel = m_bottomLevel->getValue();
-        size_t numMaxLevels = 0;
+        size_t numMaxLevels = 1;
 
 #ifdef USE_NETCDF
         NcFile ncid = NcFile::open(firstFileName, *token.comm());

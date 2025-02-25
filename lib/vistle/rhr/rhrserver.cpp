@@ -24,7 +24,6 @@
 #include <vistle/core/messages.h>
 #include <vistle/util/listenv4v6.h>
 #include <vistle/util/threadname.h>
-#include <vistle/module/module.h>
 
 
 #define CERR std::cerr << "RHR: "
@@ -64,8 +63,7 @@ bool RhrServer::send(message::Buffer msg, const buffer *payload)
 }
 
 //! called when plugin is loaded
-RhrServer::RhrServer(vistle::Module *module)
-: m_acceptorv4(m_io), m_acceptorv6(m_io), m_listen(true), m_port(0), m_destPort(0)
+RhrServer::RhrServer(): m_acceptorv4(m_io), m_acceptorv6(m_io), m_listen(true), m_port(0), m_destPort(0)
 {
     init();
 }
@@ -383,9 +381,8 @@ bool RhrServer::makeConnection(const std::string &host, unsigned short port, int
     }
 
     asio::ip::tcp::resolver resolver(m_io);
-    asio::ip::tcp::resolver::query query(host, std::to_string(port), asio::ip::tcp::resolver::query::numeric_service);
     boost::system::error_code ec;
-    asio::ip::tcp::resolver::iterator endpoint_iterator = resolver.resolve(query, ec);
+    auto endpoints = resolver.resolve(host, std::to_string(port), asio::ip::tcp::resolver::numeric_service, ec);
     if (ec) {
         CERR << "could not resolve " << host << ": " << ec.message() << std::endl;
         return false;
@@ -394,7 +391,7 @@ bool RhrServer::makeConnection(const std::string &host, unsigned short port, int
     std::shared_ptr<asio::ip::tcp::socket> sock(new asio::ip::tcp::socket(m_io));
     int i = 0;
     while (secondsToTry <= 0 || i < secondsToTry * 10) {
-        asio::connect(*sock, endpoint_iterator, ec);
+        asio::connect(*sock, endpoints, ec);
         if (secondsToTry == 0)
             break;
         if (ec != boost::system::errc::connection_refused) {

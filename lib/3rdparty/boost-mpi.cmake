@@ -39,7 +39,7 @@ if(BOOST_MPI_DIR STREQUAL "boost-mpi-1.69")
     set(boost_mpi_SOURCES ${boost_mpi_SOURCES} ${BOOST_MPI_DIR}/src/offsets.cpp)
 endif()
 
-if(NOT BOOST_MPI_DIR STREQUAL "boost-mpi-1.58")
+if(NOT BOOST_MPI_DIR STREQUAL "boost-mpi-1.60")
     set(boost_mpi_SOURCES ${boost_mpi_SOURCES} ${BOOST_MPI_DIR}/src/error_string.cpp)
 endif()
 
@@ -56,7 +56,7 @@ target_link_libraries(
     ${BOOST_MPI} #don't use vistle_target_link_libraries here because adding dependency for boost_mpi::serialization brings errors.
     PRIVATE Boost::system
     PUBLIC Boost::serialization
-    PUBLIC MPI::MPI_C)
+    PUBLIC MPI::MPI_CXX)
 
 get_target_property(BOOST_SERIALIZATION_INCLUDES Boost::serialization INTERFACE_INCLUDE_DIRECTORIES)
 target_include_directories(${BOOST_MPI} SYSTEM INTERFACE ${BOOST_SERIALIZATION_INCLUDES})

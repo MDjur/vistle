@@ -92,7 +92,7 @@ public:
 
     struct DelayedObject {
         DelayedObject(std::shared_ptr<PluginRenderObject> ro, VistleGeometryGenerator generator);
-        std::shared_ptr<PluginRenderObject> ro;
+        std::shared_ptr<PluginRenderObject> pro;
         std::string name;
         VistleGeometryGenerator generator;
         std::shared_future<osg::Geode *> node_future;
@@ -154,6 +154,11 @@ protected:
 
     std::unique_ptr<opencover::config::Access> m_config;
     std::unique_ptr<CoverConfigBridge> m_coverConfigBridge;
+    VistleGeometryGenerator::Options m_options;
+
+    vistle::IntParameter *m_optimizeIndices = nullptr;
+    vistle::IntParameter *m_numPrimitives = nullptr;
+    vistle::IntParameter *m_indexedGeometry = nullptr;
 };
 
 #endif

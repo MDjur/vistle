@@ -19,6 +19,7 @@ public:
         NONE = cell::NONE, // 0
         POINT = cell::POINT, // 1
         BAR = cell::BAR, // 3
+        POLYLINE = cell::POLYLINE, // 4
         TRIANGLE = cell::TRIANGLE, // 5
         POLYGON = cell::POLYGON, // 7
         QUAD = cell::QUAD, // 9
@@ -30,16 +31,18 @@ public:
         NUM_TYPES = cell::NUM_TYPES, // 15
     };
 
+    static const char *toString(Type t, bool abbreviation = false);
+
     static constexpr Index MaxNumVertices = 4;
     static constexpr Index MaxNumFaces = 6;
     static constexpr int Dimensionality[NUM_TYPES] = {
-        -1, 0, -1, 1, -1, 2, -1, 2, 1, 2, 3, 3, 3, 3, 3,
+        -1, 0, -1, 1, 1, 2, -1, 2, 1, 2, 3, 3, 3, 3, 3,
     };
     static constexpr int NumVertices[NUM_TYPES] = {
         0, 1, -1, 2, -1, 3, -1, -1, -1, 4, 4, -1, 8, 6, 5,
     };
     static constexpr int NumFaces[NUM_TYPES] = {
-        0, 0, -1, 0, -1, 1, -1, 1, -1, 1, 4, -1, 6, 5, 5,
+        0, 0, -1, 0, 0, 1, -1, 1, -1, 1, 4, -1, 6, 5, 5,
     };
     static constexpr unsigned FaceSizes[NUM_TYPES][MaxNumFaces] = {
         // none
@@ -50,7 +53,7 @@ public:
         {0, 0, 0, 0, 0, 0},
         // bar
         {0, 0, 0, 0, 0, 0},
-        // invalid
+        // polyline
         {0, 0, 0, 0, 0, 0},
         // triangle
         {3, 0, 0, 0, 0, 0},
@@ -126,7 +129,7 @@ public:
                 |  3-------|--2
                 | /        | /
                 |/         |/
-                0----------1
+                -0---------1
             */
             { 3, 2, 1, 0 },
             { 4, 5, 6, 7 },
@@ -187,12 +190,15 @@ public:
 
     Interpolator getInterpolator(Index elem, const Vector3 &point, Mapping mapping = Vertex,
                                  InterpolationMode mode = Linear) const override;
-    std::pair<Vector3, Vector3> elementBounds(Index elem) const override;
     std::vector<Index> cellVertices(Index elem) const override;
     Scalar cellDiameter(Index elem) const override;
     Vector3 cellCenter(Index elem) const override;
     std::vector<Index> getNeighborElements(Index elem) const override;
     Index cellNumFaces(Index elem) const override;
+    Index cellNumVertices(Index elem) const override;
+    Scalar cellEdgeLength(Index elem) const;
+    Scalar cellSurface(Index elem) const;
+    Scalar cellVolume(Index elem) const;
 
 private:
     mutable ShmArrayProxy<Byte> m_tl;

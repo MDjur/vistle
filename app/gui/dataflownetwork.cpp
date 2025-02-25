@@ -78,6 +78,11 @@ ModuleBrowser *DataFlowNetwork::moduleBrowser() const
     return m_mainWindow->moduleBrowser();
 }
 
+const QList<Module *> &DataFlowNetwork::modules() const
+{
+    return m_moduleList;
+}
+
 float abs(const QPointF p)
 {
     return qSqrt(p.x() * p.x() + p.y() * p.y());
@@ -196,7 +201,9 @@ void DataFlowNetwork::deleteModule(int moduleId)
 void DataFlowNetwork::moduleStateChanged(int moduleId, int stateBits)
 {
     if (Module *m = findModule(moduleId)) {
-        if (stateBits & vistle::StateObserver::Killed)
+        if (stateBits & vistle::StateObserver::Crashed)
+            m->setStatus(Module::CRASHED);
+        else if (stateBits & vistle::StateObserver::Killed)
             m->setStatus(Module::KILLED);
         else if (stateBits & vistle::StateObserver::Busy)
             m->setStatus(Module::BUSY);
@@ -319,12 +326,12 @@ void DataFlowNetwork::itemInfoChanged(QString text, int type, int id, QString po
 {
     if (Module *m = findModule(id)) {
         if (port.isEmpty()) {
-            m->setInfo(text);
+            m->setInfo(text, type);
         } else {
             std::lock_guard guard(m_state);
             const vistle::Port *p = m_state.portTracker()->findPort(id, port.toStdString());
             if (auto *gp = m->getGuiPort(p)) {
-                gp->setInfo(text);
+                gp->setInfo(text, type);
             }
         }
     }

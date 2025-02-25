@@ -33,11 +33,7 @@ using std::shared_ptr;
 DataProxy::DataProxy(StateTracker &state, unsigned short basePort, bool changePort)
 : m_hubId(message::Id::Invalid)
 , m_stateTracker(state)
-#if BOOST_VERSION >= 106600
 , m_workGuard(asio::make_work_guard(m_io))
-#else
-, m_workGuard(new asio::io_service::work(m_io))
-#endif
 , m_port(basePort)
 , m_acceptorv4(m_io)
 , m_acceptorv6(m_io)
@@ -132,7 +128,7 @@ void DataProxy::setTrace(message::Type type)
     m_traceMessages = type;
 }
 
-asio::io_service &DataProxy::io()
+asio::io_context &DataProxy::io()
 {
     return m_io;
 }
@@ -218,6 +214,11 @@ bool DataProxy::answerRemoteIdentify(std::shared_ptr<DataProxy::tcp_socket> sock
         });
         return true;
     } else if (ident.identity() == Identify::REMOTEBULKDATA) {
+        if (!ident.verifyMac()) {
+            shutdownSocket(sock, "MAC verification failed");
+            removeSocket(sock);
+            return false;
+        }
         if (ident.boost_archive_version() != m_boost_archive_version) {
 #ifndef USE_YAS
             std::cerr << "Boost.Archive version on hub " << m_hubId << " is " << m_boost_archive_version << ", but hub "
@@ -231,22 +232,12 @@ bool DataProxy::answerRemoteIdentify(std::shared_ptr<DataProxy::tcp_socket> sock
         }
         if (ident.indexSize() != m_indexSize) {
             std::cerr << "Index size on hub " << m_hubId << " is " << m_indexSize << ", but hub " << ident.senderId()
-                      << " uses Index size " << ident.indexSize() << std::endl;
-            shutdownSocket(sock, "Index size mismatch");
-            removeSocket(sock);
-            return false;
+                      << " uses Index size " << ident.indexSize()
+                      << ", transfer is only possible from smaller to larger index size" << std::endl;
         }
         if (ident.scalarSize() != m_scalarSize) {
             std::cerr << "Scalar size on hub " << m_hubId << " is " << m_scalarSize << ", but hub " << ident.senderId()
-                      << " uses Scalar size " << ident.scalarSize() << std::endl;
-            shutdownSocket(sock, "Scalar size mismatch");
-            removeSocket(sock);
-            return false;
-        }
-        if (!ident.verifyMac()) {
-            shutdownSocket(sock, "MAC verification failed");
-            removeSocket(sock);
-            return false;
+                      << " uses Scalar size " << ident.scalarSize() << ", expect precision loss" << std::endl;
         }
         return true;
     } else {
@@ -669,7 +660,7 @@ bool DataProxy::connectRemoteData(const message::AddHub &remote)
     timer.expires_from_now(boost::posix_time::seconds(connection_timeout));
     timer.async_wait([this, hubId, connectingSockets](const boost::system::error_code &ec) {
         if (ec == asio::error::operation_aborted) {
-            // timer was cancelled
+            // timer was canceled
             return;
         }
         if (ec) {
@@ -687,9 +678,12 @@ bool DataProxy::connectRemoteData(const message::AddHub &remote)
             if (ec) {
                 CERR << "cancelling operations on socket failed: " << ec.message() << std::endl;
             } else {
+                bool open = s->is_open();
                 s->close(ec);
                 if (ec) {
-                    CERR << "closing socket failed: " << ec.message() << std::endl;
+                    if (open) {
+                        CERR << "closing socket failed: " << ec.message() << std::endl;
+                    }
                 }
             }
         }
@@ -788,14 +782,14 @@ bool DataProxy::addSocket(const message::Identify &id, std::shared_ptr<DataProxy
     startThread();
     startThread();
 
-    // transfer socket to DataProxy's io service
+    // transfer socket to DataProxy's io context
     auto sock2 = std::make_shared<tcp_socket>(m_io);
     if (sock->local_endpoint().protocol() == boost::asio::ip::tcp::v4()) {
         sock2->assign(boost::asio::ip::tcp::v4(), sock->release());
     } else if (sock->local_endpoint().protocol() == boost::asio::ip::tcp::v6()) {
         sock2->assign(boost::asio::ip::tcp::v6(), sock->release());
     } else {
-        CERR << "could not transfer socket to io service" << std::endl;
+        CERR << "could not transfer socket to io context" << std::endl;
         return false;
     }
 

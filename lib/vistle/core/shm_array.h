@@ -175,6 +175,8 @@ public:
     void clearDimensionHint();
     void setDimensionHint(const size_t sx, const size_t sy = 1, const size_t sz = 1);
     void setExact(bool exact);
+    bool exact() const;
+    size_t dimensionHint(int d) const;
 
     size_t capacity() const
     {
@@ -184,12 +186,18 @@ public:
     void reserve_or_shrink(const size_t capacity);
     void shrink_to_fit();
 
+    // checks if the bounds have already been set
     bool bounds_valid() const
     {
+        // The bounds have been set, if either the min or the max value is NaN.
+        if ((m_min != m_min) || (m_max != m_max))
+            return true;
+
         return m_max >= m_min;
     }
     void invalidate_bounds();
     void update_bounds();
+    void set_bounds(value_type min, value_type max);
 
     value_type min() const
     {
@@ -250,12 +258,11 @@ void shm_array<T, allocator>::updateFromHandle(bool invalidate)
         PROF_SCOPE("shm_array::updateFromHandle()");
         m_memoryValid = true;
 
-        if (m_unknown.CanConvert<vtkm::cont::ArrayHandleBasic<handle_type>>()) {
-            m_handle = m_unknown.AsArrayHandle<vtkm::cont::ArrayHandleBasic<handle_type>>();
+        if (m_capacity > 0) {
+            m_data = reinterpret_cast<T *>(m_handle.GetWritePointer());
         } else {
-            vtkm::cont::ArrayCopy(m_unknown, m_handle);
+            m_data = nullptr;
         }
-        m_data = reinterpret_cast<T *>(m_handle.GetWritePointer());
     }
     if (invalidate) {
         m_unknown = vtkm::cont::UnknownArrayHandle();
@@ -276,12 +283,12 @@ void shm_array<T, allocator>::updateFromHandle(bool invalidate) const
     m_memoryValid = true;
 
     PROF_SCOPE("shm_array::updateFromHandle()const");
-    if (m_unknown.CanConvert<vtkm::cont::ArrayHandleBasic<handle_type>>()) {
-        m_handle = m_unknown.AsArrayHandle<vtkm::cont::ArrayHandleBasic<handle_type>>();
+
+    if (m_capacity > 0) {
+        m_data = reinterpret_cast<T *>(m_handle.GetWritePointer());
     } else {
-        vtkm::cont::ArrayCopy(m_unknown, m_handle);
+        m_data = nullptr;
     }
-    m_data = reinterpret_cast<T *>(m_handle.GetWritePointer());
 #endif
 }
 

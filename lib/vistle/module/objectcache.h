@@ -14,8 +14,7 @@ typedef std::deque<vistle::Object::const_ptr> ObjectList;
 
 class ObjectCache {
 public:
-    DEFINE_ENUM_WITH_STRING_CONVERSIONS(CacheMode,
-                                        (CacheDefault)(CacheNone)(CacheByName)(CacheDeleteEarly)(CacheDeleteLate))
+    DEFINE_ENUM_WITH_STRING_CONVERSIONS(CacheMode, (CacheNone)(CacheDeleteEarly)(CacheDeleteLate)(CacheByName))
 
     ObjectCache();
     ~ObjectCache();
@@ -48,7 +47,6 @@ private:
     std::map<std::string, EntryList> m_cache, m_oldCache;
 
     std::map<std::string, Meta> m_meta;
-    ObjectList m_emptyList;
 };
 
 V_ENUM_OUTPUT_OP(CacheMode, ObjectCache)

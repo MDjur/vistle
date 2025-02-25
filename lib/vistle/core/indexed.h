@@ -45,7 +45,6 @@ public:
 
     bool hasVertexOwnerList() const;
     VertexOwnerList::const_ptr getVertexOwnerList() const;
-    void removeVertexOwnerList() const;
     class V_COREEXPORT NeighborFinder {
         friend class Indexed;
 
@@ -69,6 +68,7 @@ public:
     virtual std::pair<Vector3, Vector3> elementBounds(Index elem) const;
     std::vector<Index> cellVertices(Index elem) const override;
     Index cellNumFaces(Index elem) const override;
+    Index cellNumVertices(Index elem) const override;
 
 private:
     mutable Index m_numEl = InvalidIndex, m_numCl = InvalidIndex;

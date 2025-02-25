@@ -32,7 +32,7 @@ ReadDuisburg::ReadDuisburg(const std::string &name, int moduleID, mpi::communica
     //initialize ports
     m_gridFile = addStringParameter("grid_file", "File containing grid and data",
                                     "/home/hpcleker/Desktop/duisburg_5t.nc", Parameter::ExistingFilename);
-    setParameterFilters(m_gridFile, "NetCDF Grid Files (*.grid.nc)/NetCDF Files (*.nc)/All Files (*)");
+    setParameterFilters(m_gridFile, "NetCDF Grid Files (*.grid.nc)/NetCDF Files (*.nc)");
 
     m_gridOut = createOutputPort("grid_out", "grid");
 
@@ -59,9 +59,14 @@ bool ReadDuisburg::examine(const vistle::Parameter *param)
     if (!param || param == m_gridFile) {
         LOCK_NETCDF(comm());
         //extract number of timesteps from file
-        NcmpiFile ncFile(comm(), m_gridFile->getValue().c_str(), NcmpiFile::read);
-        const NcmpiDim timesDim = ncFile.getDim("t");
-        size_t nTimes = timesDim.getSize();
+        size_t nTimes = 0;
+        try {
+            NcmpiFile ncFile(comm(), m_gridFile->getValue().c_str(), NcmpiFile::read);
+            const NcmpiDim timesDim = ncFile.getDim("t");
+            nTimes = timesDim.getSize();
+        } catch (std::exception &ex) {
+            sendError("Error opening file: " + std::string(ex.what()));
+        }
         UNLOCK_NETCDF(comm());
 
         setTimesteps(nTimes);
@@ -177,7 +182,7 @@ Object::ptr ReadDuisburg::generateTriangleGrid(const NcmpiFile &ncFile, int time
     std::fill(localIdx.begin(), localIdx.end(), 0);
 
     //fill coordinates, but only for vertices with water
-    for (int i = 0; i < nonZeroVerticesVec.size(); ++i) {
+    for (Index i = 0; i < nonZeroVerticesVec.size(); ++i) {
         int idx = nonZeroVerticesVec[i];
         if (idx >= 0) {
             auto x = i % dimX;

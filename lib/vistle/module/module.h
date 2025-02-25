@@ -209,7 +209,8 @@ public:
     bool sendMessageWithPayload(message::Message &message, Payload &payload) const;
 
     //! provide some information to be used as e.g. a tooltip
-    void setItemInfo(const std::string &text, const std::string &port = std::string());
+    void setItemInfo(const std::string &text, const std::string &port = std::string(),
+                     message::ItemInfo::InfoType type = message::ItemInfo::Unspecified);
 
     //! type should be a message::SendText::TextType
     void sendText(int type, const std::string &msg) const;
@@ -293,8 +294,6 @@ protected:
     int m_cacheGeneration = 0;
     std::set<Port *> m_withOutput;
 
-    void setDefaultCacheMode(ObjectCache::CacheMode mode);
-
     message::MessageQueue *sendMessageQueue;
     message::MessageQueue *receiveMessageQueue;
     std::deque<message::Buffer> messageBacklog;
@@ -376,9 +375,6 @@ private:
     IntParameter *m_useResultCache = nullptr;
     std::vector<ResultCacheBase *> m_resultCaches;
 
-    void updateOutputMode();
-    std::streambuf *m_origStreambuf = nullptr, *m_streambuf = nullptr;
-
     int m_traceMessages;
     bool m_benchmark;
     double m_benchmarkStart;
@@ -402,7 +398,20 @@ private:
 
     unsigned m_hardware_concurrency = 1;
 
-    std::map<std::string, std::string> m_currentItemInfo;
+    struct InfoKey {
+        InfoKey(const std::string &port, message::ItemInfo::InfoType type = message::ItemInfo::Unspecified)
+        : port(port), type(type)
+        {}
+        std::string port;
+        message::ItemInfo::InfoType type = message::ItemInfo::Unspecified;
+        bool operator<(const InfoKey &other) const
+        {
+            if (port != other.port)
+                return port < other.port;
+            return type < other.type;
+        }
+    };
+    std::map<InfoKey, std::string> m_currentItemInfo;
     std::string m_inputSpecies;
 
 #ifdef NDEBUG

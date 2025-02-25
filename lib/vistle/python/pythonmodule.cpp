@@ -10,13 +10,14 @@
 #include <vistle/util/pybind.h>
 
 #include <boost/lexical_cast.hpp>
-#include <boost/asio/io_service.hpp>
+#include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 
 #include <vistle/core/uuid.h>
 #include <vistle/core/message.h>
 #include <vistle/core/parameter.h>
 #include <vistle/core/port.h>
+#include <vistle/util/version.h>
 
 #include <vistle/userinterface/vistleconnection.h>
 #include "pythonmodule.h"
@@ -65,6 +66,7 @@ namespace vistle {
 
 static PythonModule *pythonModuleInstance = nullptr;
 static message::Type traceMessages = message::INVALID;
+static int traceId = message::Id::Invalid;
 
 static vistle::PythonStateAccessor &access()
 {
@@ -79,7 +81,9 @@ static vistle::StateTracker &state()
 static bool sendMessage(const vistle::message::Message &m, const vistle::buffer *payload = nullptr)
 {
     if (traceMessages == m.type() || traceMessages == message::ANY) {
-        std::cerr << "Python: send " << m << std::endl;
+        if (traceId == message::Id::Broadcast || traceId == message::Id::UI || traceId == m.destId()) {
+            std::cerr << "Python: send " << m << std::endl;
+        }
     }
     if (!pythonModuleInstance) {
         std::cerr << "cannot send message: no Vistle module instance" << std::endl;
@@ -138,6 +142,11 @@ static std::shared_ptr<message::Buffer> waitForReply(const message::uuid_t &uuid
     return state().waitForReply(uuid);
 }
 
+static std::string vistle_version()
+{
+    return vistle::version::string();
+}
+
 static bool source(const std::string &filename)
 {
 #ifdef EMBED_PYTHON
@@ -192,6 +201,7 @@ static void trace(int id = message::Id::Broadcast, message::Type type = message:
         else
             traceMessages = message::INVALID;
     }
+    traceId = id;
 
     message::Trace m(id, type, onoff);
     sendMessage(m);
@@ -207,15 +217,15 @@ static void debug(int id = message::Id::Invalid)
     sendMessage(m);
 }
 
-static bool barrier()
+static bool barrier(const std::string &info)
 {
-    message::Barrier m;
+    message::Barrier m(info);
     m.setDestId(message::Id::MasterHub);
     state().registerRequest(m.uuid());
     if (!sendMessage(m))
         return false;
     auto buf = waitForReply(m.uuid());
-    if (buf->type() == message::BARRIERREACHED) {
+    if (buf && buf->type() == message::BARRIERREACHED) {
         return true;
     }
     return false;
@@ -812,11 +822,14 @@ static void requestTunnel(unsigned short listenPort, const std::string &destHost
 
     message::RequestTunnel m(listenPort, destHost, destPort);
 
-    asio::io_service io_service;
-    asio::ip::tcp::resolver resolver(io_service);
-    try {
-        auto endpoints = resolver.resolve({destHost, std::to_string(destPort)});
-        auto addr = (*endpoints).endpoint().address();
+    asio::io_context io_context;
+    asio::ip::tcp::resolver resolver(io_context);
+    boost::system::error_code ec;
+    auto endpoints = resolver.resolve(destHost, std::to_string(destPort), ec);
+    if (ec) {
+    } else if (endpoints.empty()) {
+    } else {
+        auto addr = endpoints.begin()->endpoint().address();
         if (addr.is_v6()) {
             m.setDestAddr(addr.to_v6());
             std::cerr << destHost << " resolved to " << addr.to_v6() << std::endl;
@@ -824,7 +837,6 @@ static void requestTunnel(unsigned short listenPort, const std::string &destHost
             m.setDestAddr(addr.to_v4());
             std::cerr << destHost << " resolved to " << addr.to_v4() << std::endl;
         }
-    } catch (...) {
     }
 
     sendMessage(m);
@@ -1439,6 +1451,7 @@ PY_MODULE(_vistle, m)
         .def("status", &TSO::status)
         .def("updateStatus", &TSO::updateStatus);
 
+    m.def("version", &vistle_version, "version of Vistle");
     m.def("source", &source, "execute commands from `file`", "file"_a);
     m.def("removeHub", &removeHub, "remove hub `id` from session", "id"_a);
 
@@ -1502,7 +1515,7 @@ PY_MODULE(_vistle, m)
     m.def("trace", trace, "enable/disable message tracing for module `id`", "id"_a = message::Id::Broadcast,
           "type"_a = message::ANY, "enable"_a = true);
     m.def("debug", debug, "request a module to print its state", "id"_a = message::Id::Invalid);
-    m.def("barrier", barrier, "wait until all modules reply");
+    m.def("barrier", barrier, "wait until all modules reply", "info"_a = "anon Python barrier");
     m.def("requestTunnel", requestTunnel,
           "start TCP tunnel listening on port `arg1` on hub forwarding incoming connections to `arg2`:`arg3`",
           "listen port"_a, "dest port"_a, "dest addr"_a);
