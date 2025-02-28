@@ -25,9 +25,20 @@ class Access;
 class PythonInterpreter;
 class Directory;
 class Hub;
+
 class HubParameters: public ParameterManager {
 public:
     HubParameters(Hub &hub);
+    void sendParameterMessage(const message::Message &message, const buffer *payload = nullptr) const override;
+
+private:
+    Hub &m_hub;
+};
+
+
+class SessionParameters: public ParameterManager {
+public:
+    SessionParameters(Hub &hub);
     void sendParameterMessage(const message::Message &message, const buffer *payload = nullptr) const override;
 
 private:
@@ -61,10 +72,15 @@ public:
     bool processScript();
     bool dispatch();
     bool sendMessage(socket_ptr sock, const message::Message &msg, const buffer *payload = nullptr);
+    bool isPrincipal() const;
     unsigned short port() const;
     unsigned short dataPort() const;
-    std::shared_ptr<boost::process::child> launchProcess(const std::string &prog, const std::vector<std::string> &argv);
-    std::shared_ptr<boost::process::child> launchMpiProcess(const std::vector<std::string> &argv);
+    std::shared_ptr<boost::process::child>
+    launchProcess(int type, const std::string &prog, const std::vector<std::string> &argv,
+                  std::string name = std::string(),
+                  std::function<bool(std::shared_ptr<boost::process::child>, std::shared_ptr<boost::process::ipstream>)>
+                      parseOutput = nullptr);
+    std::shared_ptr<boost::process::child> launchMpiProcess(int type, const std::vector<std::string> &argv);
     const std::string &name() const;
 
     bool handleMessage(const message::Message &msg, socket_ptr sock = socket_ptr(), const buffer *payload = nullptr);
@@ -83,6 +99,18 @@ public:
 
     int idToHub(int id) const;
     int id() const;
+
+    enum Verbosity {
+        Quiet,
+        Normal,
+        Modules,
+        Manager,
+        DuplicateMessages,
+        Messages,
+        ManagerMessages,
+        AllMessages,
+    };
+    Verbosity verbosity() const;
 
 private:
     struct Slave;
@@ -127,15 +155,16 @@ private:
     bool handlePlainSpawn(message::Spawn &notify, bool doSpawn, bool error);
 
     void killOldModule(int migratedId);
-    void sendInfo(const std::string &s);
-    void sendError(const std::string &s);
+    void sendInfo(const std::string &s, int senderId = message::Id::Invalid);
+    void sendError(const std::string &s, int senderId = message::Id::Invalid);
     std::vector<int> getSubmoduleIds(int modId, const AvailableModule &av);
     bool m_inManager = false;
     bool m_coverIsManager = false;
     bool m_proxyOnly = false;
     vistle::message::AddHub addHubForSelf() const;
 
-    unsigned short m_basePort = 31093;
+    static const int DefaultPort = 31093;
+    unsigned short m_basePort = DefaultPort;
     unsigned short m_port = 0, m_dataPort = 0, m_masterPort = m_basePort;
     std::string m_exposedHost;
     boost::asio::ip::address m_exposedHostAddr;
@@ -149,9 +178,44 @@ private:
     std::map<socket_ptr, message::Identify::Identity> m_sockets;
     std::set<socket_ptr> m_clients;
 
+    enum VrbMode {
+        VrbNo,
+        VrbTui,
+        VrbGui,
+    };
+    VrbMode m_vrbMode = VrbMode::VrbTui;
     unsigned short m_vrbPort = 0;
     std::map<int, socket_ptr> m_vrbSockets;
     std::shared_ptr<boost::process::child> m_vrb;
+    std::chrono::steady_clock::time_point m_lastVrbStart;
+    int m_vrbStartWait = 1;
+
+    struct ObservedChild {
+        ObservedChild();
+        ~ObservedChild();
+        void sendTextToUi(message::SendText::TextType type, size_t num, const std::string &line, int moduleId) const;
+        void sendOutputToUi() const;
+        void setOutputStreaming(bool enable);
+        bool isOutputStreaming() const;
+
+        std::shared_ptr<boost::process::child> child;
+        Hub *hub = nullptr;
+        std::string name;
+        boost::process::pid_t childId = 0;
+        int moduleId = message::Id::Invalid;
+        mutable std::mutex mutex; // protect access to variables below
+        size_t numDiscarded = 0;
+        bool streamOutput = false;
+        struct TaggedLine {
+            TaggedLine(message::SendText::TextType type, const std::string &line): type(type), line(line) {}
+
+            message::SendText::TextType type;
+            std::string line;
+        };
+        std::deque<TaggedLine> buffer;
+        std::unique_ptr<std::thread> outThread, errThread;
+    };
+    std::map<boost::process::pid_t, ObservedChild> m_observedChildren;
 
     std::shared_ptr<DataProxy> m_dataProxy;
     TunnelManager m_tunnelManager;
@@ -160,8 +224,11 @@ private:
     bool m_hasUi = false;
     bool m_hasVrb = false;
 
+    int m_messageBacklog = 10000;
+
     std::mutex m_processMutex; // protect access to m_processMap
-    std::map<std::shared_ptr<boost::process::child>, int> m_processMap;
+    typedef std::map<std::shared_ptr<boost::process::child>, int> ProcessMap;
+    ProcessMap m_processMap;
     bool m_managerConnected;
 
     std::unique_ptr<vistle::Directory> m_dir;
@@ -173,6 +240,8 @@ private:
     int m_numRunningModules = 0;
     std::function<bool(void)> m_lastModuleQuitAction;
     static volatile std::atomic<bool> m_interrupt;
+    size_t m_prevNumRunning = 0;
+    std::chrono::steady_clock::time_point m_lastProcessCheck;
     boost::asio::signal_set m_signals;
     static void signalHandler(const boost::system::error_code &error, int signal_number);
 
@@ -192,6 +261,7 @@ private:
     unsigned long m_localManagerRank0Pid = 0;
     std::string m_name;
     bool m_ready = false;
+    int m_verbose = Verbosity::Normal;
 
     int m_moduleCount;
     message::Type m_traceMessages;
@@ -225,6 +295,10 @@ private:
 
     template<typename ConnMsg>
     bool handleConnectOrDisconnect(const ConnMsg &mm);
+    template<typename ConnMsg>
+    void handleMirrorConnect(const ConnMsg &conn, std::function<bool(const message::Message &)> sendFunc);
+    template<typename ConnMsg>
+    bool handlePrivConnMsg(const ConnMsg &conn, message::MessageFactory &make);
 
     bool checkChildProcesses(bool emergency = false, bool onMainThread = true);
     bool hasChildProcesses(bool ignoreGui = false);
@@ -248,15 +322,16 @@ private:
 
     boost::asio::executor_work_guard<boost::asio::io_context::executor_type> m_workGuard;
     std::vector<std::thread> m_ioThreads;
-    std::vector<std::thread> m_vrbThreads;
     void startIoThread();
     void stopIoThreads();
 
-    HubParameters params;
+    SessionParameters session;
     ConfigParameters settings;
+    HubParameters params;
 
     std::mutex m_outstandingDataConnectionMutex;
     std::map<vistle::message::AddHub, std::future<bool>> m_outstandingDataConnections;
+    bool checkOutstandingDataConnections();
 
     std::unique_ptr<PythonInterpreter> m_python;
 

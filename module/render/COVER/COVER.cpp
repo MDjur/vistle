@@ -1,6 +1,7 @@
 #include <future>
 #include <boost/algorithm/string/predicate.hpp>
-
+#include <boost/mpi.hpp>
+#include <boost/serialization/map.hpp>
 // cover
 #include <net/message.h>
 #include <cover/coVRPluginSupport.h>
@@ -793,59 +794,27 @@ std::map<std::string, std::string> COVER::setupEnv(const std::string &bindir)
     std::map<std::string, std::string> env;
     std::map<std::string, bool> envToSet;
     if (rank == 0) {
-        std::vector<std::string> envvars;
-        // system
-        envvars.push_back("PATH");
-        envvars.push_back("LD_LIBRARY_PATH");
-        envvars.push_back("LD_PRELOAD");
-        envvars.push_back("DYLD_LIBRARY_PATH");
-        envvars.push_back("DYLD_FRAMEWORK_PATH");
-        envvars.push_back("DYLD_FALLBACK_LIBRARY_PATH");
-        envvars.push_back("DYLD_FALLBACK_FRAMEWORK_PATH");
-        envvars.push_back("LANG");
-        envvars.push_back("LC_CTYPE");
-        envvars.push_back("LC_NUMERIC");
-        envvars.push_back("LC_TIME");
-        envvars.push_back("LC_COLLATE");
-        envvars.push_back("LC_MONETARY");
-        envvars.push_back("LC_MESSAGES");
-        envvars.push_back("LC_PAPER");
-        envvars.push_back("LC_NAME");
-        envvars.push_back("LC_ADDRESS");
-        envvars.push_back("LC_TELEPHONE");
-        envvars.push_back("LC_MEASUREMENT");
-        envvars.push_back("LC_IDENTIFICATION");
-        envvars.push_back("LC_ALL");
+        constexpr std::array<const char *, 41> envvars = {
+            // system
+            "PATH", "LD_LIBRARY_PATH", "LD_PRELOAD", "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH",
+            "DYLD_FALLBACK_LIBRARY_PATH", "DYLD_FALLBACK_FRAMEWORK_PATH", "LANG", "LC_CTYPE", "LC_NUMERIC", "LC_TIME",
+            "LC_COLLATE", "LC_MONETARY", "LC_MESSAGES", "LC_PAPER", "LC_NAME", "LC_ADDRESS", "LC_TELEPHONE",
+            "LC_MEASUREMENT", "LC_IDENTIFICATION", "LC_ALL", "CONFIG_DEBUG", "COCONFIG", "COCONFIG_LOCAL",
+            // covconfig
+            "COCONFIG_DEBUG",
+            // covise config
+            "COCONFIG_DIR", "COCONFIG_SCHEMA", "COVISE_CONFIG",
+            // cover
+            "COVER_PLUGINS", "COVER_TABLETPC",
+            // "COVISE_HOST",
+            "COVISE_SG_DEBUG", "COVISEDIR", "COVISE_PATH", "ARCHSUFFIX",
+            // OpenSceneGraph
+            "OSGFILEPATH", "OSG_FILE_PATH", "OSG_NOTIFY_LEVEL", "OSG_LIBRARY_PATH", "OSG_LD_LIBRARY_PATH",
+            // Qt
+            "QT_AUTO_SCREEN_SCALE_FACTOR", "QT_SCREEN_SCALE_FACTORS"};
 
-        // covconfig
-        envvars.push_back("CONFIG_DEBUG");
-
-        // covise config
-        envvars.push_back("COCONFIG");
-        envvars.push_back("COCONFIG_LOCAL");
-        envvars.push_back("COCONFIG_DEBUG");
-        envvars.push_back("COCONFIG_DIR");
-        envvars.push_back("COCONFIG_SCHEMA");
-        envvars.push_back("COVISE_CONFIG");
-        // cover
-        envvars.push_back("COVER_PLUGINS");
-        envvars.push_back("COVER_TABLETPC");
-        envvars.push_back("COVISE_SG_DEBUG");
-        //envvars.push_back("COVISE_HOST");
-        envvars.push_back("COVISEDIR");
-        envvars.push_back("COVISE_PATH");
-        envvars.push_back("ARCHSUFFIX");
-        // OpenSceneGraph
-        envvars.push_back("OSGFILEPATH");
-        envvars.push_back("OSG_FILE_PATH");
-        envvars.push_back("OSG_NOTIFY_LEVEL");
-        envvars.push_back("OSG_LIBRARY_PATH");
-        envvars.push_back("OSG_LD_LIBRARY_PATH");
-        // Qt
-        envvars.push_back("QT_AUTO_SCREEN_SCALE_FACTOR");
-        envvars.push_back("QT_SCREEN_SCALE_FACTORS");
         for (const auto &v: envvars) {
-            const char *val = getenv(v.c_str());
+            const char *val = getenv(v);
             if (val)
                 env[v] = val;
         }
@@ -881,43 +850,9 @@ std::map<std::string, std::string> COVER::setupEnv(const std::string &bindir)
     std::string vistleplugin = "Vistle";
     env["VISTLE_PLUGIN"] = vistleplugin;
 
-    std::string ldpath, dyldpath, dyldfwpath, covisepath;
-
-    int numvars = env.size();
-    MPI_Bcast(&numvars, 1, MPI_INT, 0, (MPI_Comm)comm());
-    auto it = env.begin();
-    for (int i = 0; i < numvars; ++i) {
-        std::string name;
-        std::string value;
-        if (rank == 0) {
-            name = it->first;
-            value = it->second;
-        }
-
-        auto sync_string = [this, rank](std::string &s) {
-            std::vector<char> buf;
-            int len = -1;
-            if (rank == 0)
-                len = s.length() + 1;
-            MPI_Bcast(&len, 1, MPI_INT, 0, (MPI_Comm)comm());
-            buf.resize(len);
-            if (rank == 0)
-                strcpy(buf.data(), s.c_str());
-            MPI_Bcast(buf.data(), buf.size(), MPI_BYTE, 0, (MPI_Comm)comm());
-            s = buf.data();
-        };
-        sync_string(name);
-        sync_string(value);
-
-        setenv(name.c_str(), value.c_str(), 1 /* overwrite */);
-
-        if (rank == 0)
-            ++it;
-        else
-            env[name] = value;
-
-        //std::cerr << name << " -> " << value << std::endl;
-    }
+    mpi::broadcast(comm(), env, 0);
+    for (const auto v: env)
+        setenv(v.first.c_str(), v.second.c_str(), 1 /* overwrite */);
 
     return env;
 }
@@ -942,24 +877,19 @@ int COVER::runMain(int argc, char *argv[])
     for (const auto &libdir: libpath) {
         std::string abslib = libdir + "/" + libcover;
         const char mainname[] = "mpi_main";
-#ifdef WIN32
-        handle = LoadLibraryA(abslib.c_str());
-#else
-        handle = dlopen(abslib.c_str(), RTLD_LAZY);
-#endif
-
-        if (!handle) {
 #ifdef _WIN32
+        handle = LoadLibraryA(abslib.c_str());
+        if (!handle) {
             std::cerr << "failed to dlopen " << abslib << std::endl;
-#else
-            std::cerr << "failed to dlopen " << abslib << ": " << dlerror() << std::endl;
-#endif
             continue;
         }
-
-#ifdef _WIN32
         mpi_main = (mpi_main_t *)GetProcAddress((HINSTANCE)handle, mainname);
 #else
+        handle = dlopen(abslib.c_str(), RTLD_LAZY);
+        if (!handle) {
+            std::cerr << "failed to dlopen " << abslib << ": " << dlerror() << std::endl;
+            continue;
+        }
         mpi_main = (mpi_main_t *)dlsym(handle, mainname);
 #endif
         if (mpi_main) {
@@ -1040,7 +970,8 @@ bool COVER::handleMessage(const message::Message *message, const MessagePayload 
     }
     case vistle::message::COVER: {
         auto &cmsg = message->as<const message::Cover>();
-        covise::DataHandle dh(const_cast<char *>(payload->data()), payload->size(), false /* do not delete */);
+        covise::DataHandle dh(const_cast<char *>(payload ? payload->data() : nullptr), payload ? payload->size() : 0,
+                              false /* do not delete */);
         covise::Message msg(cmsg.subType(), dh);
         msg.sender = cmsg.sender();
         msg.send_type = cmsg.senderType();

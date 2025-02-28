@@ -1,8 +1,4 @@
-if(WIN32)
-    cmake_minimum_required(VERSION 3.15.2 FATAL_ERROR)
-else(WIN32)
-    cmake_minimum_required(VERSION 3.12.0 FATAL_ERROR)
-endif()
+cmake_minimum_required(VERSION 3.16 FATAL_ERROR)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED 14)
@@ -101,12 +97,20 @@ if(CMAKE_CONFIGURATION_TYPES)
     if(${CMAKE_GENERATOR} STREQUAL "Ninja Multi-Config")
         set(CMAKE_DEFAULT_BUILD_TYPE "RelWithDebInfo")
     endif()
+    set(CMAKE_CONFIGURATION_TYPES ${CMAKE_CONFIGURATION_TYPES};Sanitize;RelSanitize)
 elseif(CMAKE_BUILD_TYPE STREQUAL "")
     set(CMAKE_BUILD_TYPE
         "RelWithDebInfo"
         CACHE STRING "Choose the type of build, options are: None(CMAKE_CXX_FLAGS or CMAKE_C_FLAGS used) Debug Release RelWithDebInfo MinSizeRel." FORCE)
     message("Setting CMAKE_BUILD_TYPE to ${CMAKE_BUILD_TYPE}")
 endif()
+
+set(CMAKE_C_FLAGS_SANITIZE "${CMAKE_C_FLAGS_DEBUG} -fsanitize=address")
+set(CMAKE_C_FLAGS_RELSANITIZE "-O1 -g -fsanitize=address")
+set(CMAKE_CXX_FLAGS_SANITIZE "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=address")
+set(CMAKE_CXX_FLAGS_RELSANITIZE "${CMAKE_C_FLAGS_RELSANITIZE}")
+set(CMAKE_ISPC_FLAGS_SANITIZE "${CMAKE_ISPC_FLAGS_DEBUG}")
+set(CMAKE_ISPC_FLAGS_RELSANITIZE "${CMAKE_ISPC_FLAGS_RELSANITIZE} -O1 -g")
 
 # use this instead of FIND_PACKAGE to prefer Package in $PACKAGE_HOME and $EXTERNLIBS/package
 macro(vistle_find_package package)
@@ -414,14 +418,9 @@ if(NOT VISTLE_GUI_ONLY)
         endif()
     endif()
 
-    if(CMAKE_VERSION VERSION_LESS 3.12)
-        message(WARNING "CMake 3.12 or newer is required for compiling Python support")
-    else()
-        vistle_find_package(Python COMPONENTS Interpreter Development REQUIRED)
-
-        if(Python_FOUND)
-            message("Found Python version ${Python_VERSION}")
-        endif()
+    vistle_find_package(Python COMPONENTS Interpreter Development REQUIRED)
+    if(Python_FOUND)
+        message("Found Python version ${Python_VERSION}")
     endif()
 
     # vistle_find_package(IceT REQUIRED)
@@ -599,15 +598,14 @@ endif()
 
 add_definitions(-DBOOST_LIB_DIAGNOSTIC=1)
 
-get_property(LIB64 GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS)
-
-if(LIB64)
-    set(LIBSUFFIX 64)
-else()
-    set(LIBSUFFIX "")
-endif()
-
 if(NOT WIN32 AND NOT APPLE)
+    get_property(LIB64 GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS)
+    if(LIB64)
+        set(LIBSUFFIX 64)
+    else()
+        set(LIBSUFFIX "")
+    endif()
+
     set(INSTALL_LIB_DIR
         lib${LIBSUFFIX}
         CACHE PATH "Installation directory for libraries")
@@ -617,27 +615,16 @@ endif()
 include(GNUInstallDirs)
 
 macro(vistle_install_library targetname)
-    if(${CMAKE_VERSION} VERSION_LESS "3.12.4")
-        install(
-            TARGETS ${targetname}
-            EXPORT ${targetname}Targets
-            INCLUDES
-            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT ${targetname}_Runtime
-            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT ${targetname}_Runtime
-            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT ${targetname}_Development)
-    else()
-        install(
-            TARGETS ${targetname}
-            EXPORT ${targetname}Targets
-            INCLUDES
-            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT ${targetname}_Runtime
-            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-                    COMPONENT ${targetname}_Runtime
-                    NAMELINK_COMPONENT ${targetname}_Development
-            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT ${targetname}_Development)
-    endif()
+    install(
+        TARGETS ${targetname}
+        EXPORT ${targetname}Targets
+        INCLUDES
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT ${targetname}_Runtime
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+                COMPONENT ${targetname}_Runtime
+                NAMELINK_COMPONENT ${targetname}_Development
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT ${targetname}_Development)
 
     if("${vistle_install_include_directory}" STREQUAL "")
         string(REPLACE ${PROJECT_BINARY_DIR}/lib/vistle "" vistle_install_include_directory ${CMAKE_CURRENT_BINARY_DIR})
@@ -877,7 +864,7 @@ macro(USE_OPENMP)
                 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${LIBOMP}")
             endif()
         endif()
-    else()
+    elseif(${CMAKE_CXX_COMPILER_ID} MATCHES "Clang" OR ${CMAKE_CXX_COMPILER_ID} STREQUAL "GNU")
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unknown-pragmas")
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unknown-pragmas")
     endif()

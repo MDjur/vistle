@@ -4,7 +4,6 @@
 
 #include <vistle/core/message.h>
 
-#include <QDebug>
 #include <QKeyEvent>
 #include <QMimeData>
 #include <QMenu>
@@ -114,6 +113,15 @@ void ModuleListWidget::setFilter(QString filter)
                     item->setSelected(firstMatch);
                     if (firstMatch)
                         setCurrentItem(item);
+
+                    if (m_filter.size() == item->text(0).size()) {
+                        // exact match - select also if not first match
+                        if (!firstMatch) {
+                            currentItem()->setSelected(false);
+                            setCurrentItem(item);
+                        }
+                        item->setSelected(true);
+                    }
                     firstMatch = false;
                 } else {
                     item->setSelected(false);

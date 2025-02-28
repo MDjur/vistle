@@ -6,14 +6,13 @@
 #include <QGraphicsScene>
 
 #include "port.h"
-#include "module.h"
 #include <vistle/core/uuid.h>
+#include <vistle/userinterface/vistleconnection.h>
 
 #include <cassert>
 #include <set>
 
 namespace vistle {
-class VistleConnection;
 class StateTracker;
 } // namespace vistle
 
@@ -22,6 +21,7 @@ namespace gui {
 class Connection;
 class MainWindow;
 class ModuleBrowser;
+class Module;
 
 enum SelectionDirection {
     SelectConnected,
@@ -65,6 +65,18 @@ public:
     bool isDark() const;
     vistle::StateTracker &state() const;
 
+    template<class T>
+    static void setParameter(int id, QString name, const T &value);
+
+    template<class T>
+    static std::shared_ptr<vistle::ParameterBase<T>> getParameter(int id, QString name);
+
+    static QPointF getModulePosition(int id);
+    static int getModuleLayer(int id);
+
+signals:
+    void toggleOutputStreaming(int moduleId, bool enable);
+
 public slots:
     void addModule(int moduleId, const boost::uuids::uuid &spawnUuid, QString name);
     void deleteModule(int moduleId);
@@ -78,6 +90,7 @@ public slots:
     void moduleMessage(int senderId, int type, QString message);
     void clearMessages(int moduleId);
     void messagesVisibilityChanged(int moduleId, bool visible);
+    void outputStreamingChanged(int moduleId, bool enable);
 
     void emphasizeConnections(QList<Module *> modules);
     void visibleLayerChanged(int layer);
@@ -138,6 +151,22 @@ private slots:
     void selectConnected(int direction, int id, QString port = QString());
 };
 
+template<class T>
+void DataFlowNetwork::setParameter(int id, QString name, const T &value)
+{
+    vistle::VistleConnection::the().setParameter(id, name.toStdString(), value);
+}
+
+template<class T>
+std::shared_ptr<vistle::ParameterBase<T>> DataFlowNetwork::getParameter(int id, QString name)
+{
+    return std::dynamic_pointer_cast<vistle::ParameterBase<T>>(
+        vistle::VistleConnection::the().getParameter(id, name.toStdString()));
+}
+
 } //namespace gui
 
+// required for compiling generated moc for emphasizeConnections with GCC and MSVC,
+// but cannot be included at top as this prevents template instantiation for Clang in module.h
+#include "module.h"
 #endif // VSCENE_H

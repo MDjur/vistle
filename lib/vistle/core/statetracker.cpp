@@ -13,7 +13,7 @@
 #include <vistle/util/vecstreambuf.h>
 #include "archives.h"
 
-#define CERR std::cerr << m_name << ": "
+#define CERR std::cerr << message::Id::name(m_name, m_id) << " state: "
 
 //#define DEBUG
 
@@ -60,6 +60,11 @@ StateTracker::StateTracker(int id, const std::string &name, std::shared_ptr<Port
     runningMap.emplace(Id::Config, config);
 }
 
+void StateTracker::setVerbose(bool verbose)
+{
+    m_verbose = verbose;
+}
+
 StateTracker::mutex &StateTracker::getMutex()
 {
     return m_replyMutex;
@@ -83,6 +88,19 @@ bool StateTracker::quitting() const
 void StateTracker::setId(int id)
 {
     m_id = id;
+}
+
+void StateTracker::setModified(const std::string &reason)
+{
+    bool first = false;
+    for (StateObserver *o: m_observers) {
+        if (o->modificationCount() == 0)
+            first = true;
+        o->incModificationCount();
+    }
+    if (first) {
+        CERR << "modified: " << reason << std::endl;
+    }
 }
 
 int StateTracker::getMasterHub() const
@@ -332,6 +350,11 @@ void StateTracker::appendModuleState(VistleState &state, const StateTracker::Mod
         crash.setSenderId(m.id);
         appendMessage(state, crash);
     }
+
+    if (m.outputStreaming) {
+        Debug d(m.id, Debug::SwitchOutputStreaming, Debug::SwitchOn);
+        appendMessage(state, d);
+    }
 }
 
 void StateTracker::appendModuleParameter(VistleState &state, const Module &m) const
@@ -570,7 +593,9 @@ bool StateTracker::handle(const message::Message &msg, const char *payload, size
         // fall through
     default:
         if (m_alreadySeen.find(msg.uuid()) != m_alreadySeen.end()) {
-            CERR << "duplicate message: " << msg << std::endl;
+            if (m_verbose) {
+                CERR << "duplicate message: " << msg << std::endl;
+            }
         }
         m_alreadySeen.insert(msg.uuid());
     }
@@ -579,7 +604,7 @@ bool StateTracker::handle(const message::Message &msg, const char *payload, size
     if (m_traceId != Id::Invalid && m_traceType != INVALID) {
         if (msg.type() == m_traceType || m_traceType == ANY) {
             if (msg.senderId() == m_traceId || msg.destId() == m_traceId || m_traceId == Id::Broadcast) {
-                std::cout << m_name << ": " << msg << std::endl << std::flush;
+                CERR << msg << std::endl << std::flush;
             }
         }
     }
@@ -950,15 +975,33 @@ bool StateTracker::handlePriv(const message::AddHub &hub)
 
 bool StateTracker::handlePriv(const message::Debug &debug)
 {
+    int id = debug.getModule();
     switch (debug.getRequest()) {
     case message::Debug::PrintState: {
-        int id = debug.getModule();
         if (id == m_id || id == message::Id::Invalid) {
             printModules(true);
         }
         break;
     }
     case message::Debug::AttachDebugger: {
+        break;
+    }
+    case message::Debug::ReplayOutput: {
+        break;
+    }
+    case message::Debug::SwitchOutputStreaming: {
+        auto it = runningMap.find(id);
+        if (it != runningMap.end()) {
+            auto &mod = it->second;
+            switch (debug.getSwitchAction()) {
+            case message::Debug::SwitchAction::SwitchOff: {
+                mod.outputStreaming = false;
+            } break;
+            case message::Debug::SwitchAction::SwitchOn: {
+                mod.outputStreaming = true;
+            } break;
+            }
+        }
         break;
     }
     }
@@ -1017,8 +1060,8 @@ bool StateTracker::handlePriv(const message::Spawn &spawn)
         it->second.mirrors.insert(moduleId);
     }
 
+    setModified("spawn " + std::to_string(moduleId));
     for (StateObserver *o: m_observers) {
-        o->incModificationCount();
         o->newModule(moduleId, spawn.uuid(), mod.name);
     }
 
@@ -1138,8 +1181,8 @@ bool StateTracker::handlePriv(const message::ModuleExit &moduleExit)
     } else {
         portTracker()->removeModule(mod);
 
+        setModified("exit " + std::to_string(mod));
         for (StateObserver *o: m_observers) {
-            o->incModificationCount();
             o->deleteModule(mod);
         }
 
@@ -1301,7 +1344,6 @@ bool StateTracker::handlePriv(const message::AddParameter &addParam)
     for (StateObserver *o: m_observers) {
         o->newParameter(addParam.senderId(), addParam.getName());
     }
-    const Port *p = nullptr;
     if (portTracker()) {
         if (const Port *p = portTracker()->addPort(addParam.senderId(), addParam.getName(), addParam.description(),
                                                    Port::PARAMETER)) {
@@ -1367,25 +1409,32 @@ bool StateTracker::handlePriv(const message::SetParameter &setParam)
 
     mutex_locker guard(m_stateMutex);
     const int senderId = setParam.senderId();
-    if (setParam.getModule() == senderId) {
-        if (runningMap.find(senderId) != runningMap.end()) {
-            auto param = getParameter(setParam.getModule(), setParam.getName());
+    const int id = setParam.getModule();
+    const std::string name = setParam.getName();
+    if (senderId == id || (senderId == Id::MasterHub && (id == Id::Vistle || id == Id::Config))) {
+        if (runningMap.find(id) != runningMap.end()) {
+            auto param = getParameter(id, name);
             if (param) {
                 setParam.apply(param);
                 handled = true;
             }
         }
-    } else
-        return true; //this message has to processed by the module first, we do not have to do anything
+    } else {
+        //this message has to processed by the module first, we do not have to do anything
+        //CERR << "reject based on id: " << setParam << std::endl;
+        return true;
+    }
 
     if (handled) {
-        for (StateObserver *o: m_observers) {
-            if (!(setParam.isInitialization() || setParam.rangeType() == Parameter::Minimum ||
-                  setParam.rangeType() == Parameter::Maximum)) {
-                o->incModificationCount();
-            }
-            o->parameterValueChanged(setParam.senderId(), setParam.getName());
+        if (!(setParam.isInitialization() || setParam.rangeType() == Parameter::Minimum ||
+              setParam.rangeType() == Parameter::Maximum)) {
+            setModified("parameter " + std::to_string(id) + ":" + name);
         }
+        for (StateObserver *o: m_observers) {
+            o->parameterValueChanged(setParam.senderId(), name);
+        }
+    } else if (!name.empty()) {
+        CERR << "parameter not found: " << setParam << std::endl;
     }
 
     return handled;
@@ -1722,15 +1771,22 @@ std::vector<std::string> StateTracker::getParameters(int id) const
 
 std::shared_ptr<Parameter> StateTracker::getParameter(int id, const std::string &name) const
 {
+    if (name.empty())
+        return std::shared_ptr<Parameter>();
+
     mutex_locker guard(m_stateMutex);
 
     RunningMap::const_iterator rit = runningMap.find(id);
-    if (rit == runningMap.end())
+    if (rit == runningMap.end()) {
+        //CERR << "getParameter: module " << id << " not found for " << name << std::endl;
         return std::shared_ptr<Parameter>();
+    }
 
     ParameterMap::const_iterator pit = rit->second.parameters.find(name);
-    if (pit == rit->second.parameters.end())
+    if (pit == rit->second.parameters.end()) {
+        //CERR << "getParameter: parameter " << name << " not found for " << id << std::endl;
         return std::shared_ptr<Parameter>();
+    }
 
     return pit->second;
 }

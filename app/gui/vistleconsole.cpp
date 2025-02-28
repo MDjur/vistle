@@ -43,7 +43,6 @@
 #include <vistle/core/messages.h>
 
 #include <QApplication>
-#include <QDebug>
 
 #ifdef HAVE_PYTHON
 namespace py = pybind11;
@@ -157,6 +156,10 @@ void VistleConsole::printHistory()
 void VistleConsole::appendHtml(const QString &text, int type)
 {
     using namespace vistle::message;
+    if (type == SendText::Cerr || type == SendText::Clog || type == SendText::Cout) {
+        // don't spam console, show only in module view
+        return;
+    }
 
     // save the current command
     QTextCursor cursor = textCursor();
@@ -193,6 +196,11 @@ void VistleConsole::appendHtml(const QString &text, int type)
 void VistleConsole::appendInfo(const QString &text, int type)
 {
     using namespace vistle::message;
+
+    if (type == SendText::Cerr || type == SendText::Clog || type == SendText::Cout) {
+        // don't spam console, show only in module view
+        return;
+    }
 
     // save the current command
     QTextCursor cursor = textCursor();
@@ -247,7 +255,7 @@ VistleConsole *VistleConsole::the()
 //QTcl console constructor (init the QTextEdit & the attributes)
 VistleConsole::VistleConsole(QWidget *parent)
 #ifdef HAVE_PYTHON
-: QConsole(parent, "Type \"help(vistle)\" for help, \"help()\" for general help ")
+: QConsole(parent, "<p>Type \"<tt>help(vistle)</tt>\" for help, \"<tt>help()</tt>\" for general help</p>")
 #else
 : QConsole(parent)
 #endif

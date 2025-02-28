@@ -201,6 +201,8 @@ public:
 
     std::string barrierInfo(const message::uuid_t &uuid) const;
 
+    void setVerbose(bool verbose);
+
 protected:
     std::shared_ptr<message::Buffer> removeRequest(const message::uuid_t &uuid);
     bool registerReply(const message::uuid_t &uuid, const message::Message &msg);
@@ -218,6 +220,7 @@ protected:
         bool busy = false;
         bool executing = false;
         bool crashed = false;
+        bool outputStreaming = false;
         std::string name;
         ParameterMap parameters;
         ParameterOrder paramOrder;
@@ -350,6 +353,10 @@ private:
 
     std::map<message::uuid_t, std::string> m_barriers;
     bool m_quitting = false;
+
+    bool m_verbose = false;
+
+    void setModified(const std::string &reason = {});
 };
 
 } // namespace vistle

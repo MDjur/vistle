@@ -1007,7 +1007,8 @@ static void setCompoundDropPosition(Float x, Float y)
 
 static void setRelativePos(int id, Float x, Float y)
 {
-    setVectorParam2(id, "_position", x + compoundDropPositionX, y + compoundDropPositionY, true);
+    setVectorParam2(message::Id::Vistle, std::string("position[" + std::to_string(id) + "]").c_str(),
+                    x + compoundDropPositionX, y + compoundDropPositionY, true);
 }
 
 void moduleCompoundToFile(const ModuleCompound &comp)
@@ -1600,17 +1601,10 @@ PythonModule::PythonModule(PythonStateAccessor &stateAccessor): m_access(&stateA
 {
     assert(pythonModuleInstance == nullptr);
     pythonModuleInstance = this;
+#ifdef DEBUG
     std::cerr << "creating Vistle python module" << std::endl;
-}
-
-#if 0
-PythonModule::PythonModule(VistleConnection *vc): m_access(new UiPythonStateAccessor(vc)), m_vistleConnection(vc)
-{
-    assert(pythonModuleInstance == nullptr);
-    pythonModuleInstance = this;
-    std::cerr << "creating Vistle python module" << std::endl;
-}
 #endif
+}
 
 PythonModule::~PythonModule()
 {
@@ -1630,7 +1624,9 @@ bool PythonModule::import(py::object *ns, const std::string &path)
         py::dict locals;
         locals["modulename"] = "vistle";
         locals["path"] = path + "/vistle.py";
+#ifdef DEBUG
         std::cerr << "Python: loading " << path + "/vistle.py" << std::endl;
+#endif
 #if PY_MAJOR_VERSION > 3 || (PY_MAJOR_VERSION == 3 && PY_MINOR_VERSION >= 6)
         py::eval<py::eval_statements>(R"(
          import sys
@@ -1666,7 +1662,9 @@ bool PythonModule::import(py::object *ns, const std::string &path)
         return false;
     }
 
+#ifdef DEBUG
     std::cerr << "done loading of vistle.py" << std::endl;
+#endif
 #endif
 
     return true;
