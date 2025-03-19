@@ -1,5 +1,5 @@
-#ifndef OBJECT_H
-#define OBJECT_H
+#ifndef VISTLE_CORE_OBJECT_H
+#define VISTLE_CORE_OBJECT_H
 
 #include <vector>
 #include <memory>
@@ -420,7 +420,9 @@ public: \
     } \
     Object::ptr cloneTypeInternal() const override \
     { \
-        return Object::ptr(new ObjType(Object::Initialized)); \
+        auto clone = std::make_shared<ObjType>(Object::Initialized); \
+        clone->d()->copyAttributes(this->d(), true); \
+        return clone; \
     } \
     static Object *createEmpty(const std::string &name) \
     { \
@@ -632,12 +634,6 @@ private: \
 void V_COREEXPORT registerTypes();
 
 V_ENUM_OUTPUT_OP(Type, Object)
-
-template<typename O, typename... Args>
-typename O::ptr make_ptr(Args &&...args)
-{
-    return typename O::ptr(new O{std::forward<Args>(args)...});
-}
 
 } // namespace vistle
 #endif

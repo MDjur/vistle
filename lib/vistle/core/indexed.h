@@ -1,5 +1,5 @@
-#ifndef INDEXED_H
-#define INDEXED_H
+#ifndef VISTLE_CORE_INDEXED_H
+#define VISTLE_CORE_INDEXED_H
 
 
 #include "scalar.h"
@@ -69,6 +69,7 @@ public:
     std::vector<Index> cellVertices(Index elem) const override;
     Index cellNumFaces(Index elem) const override;
     Index cellNumVertices(Index elem) const override;
+    Vector3 cellCenter(Index elem) const override;
 
 private:
     mutable Index m_numEl = InvalidIndex, m_numCl = InvalidIndex;

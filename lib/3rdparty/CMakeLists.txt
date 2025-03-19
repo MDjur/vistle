@@ -84,6 +84,7 @@ if(VISTLE_INTERNAL_ZFP)
         "vistle_"
         CACHE STRING "Prefix to prepend to the output library name")
     mark_as_advanced(ZFP_LIBRARY_PREFIX)
+    set(ZFP_WITH_OPENMP ${VISTLE_USE_OPENMP})
     set(CMAKE_INSTALL_INCLUDEDIR include/vistle/3rdparty)
     add_subdirectory(zfp)
 endif()
@@ -222,8 +223,9 @@ if(NOT VISTLE_GUI_ONLY)
     #
     # pybind11
     #
-    set(PythonLibsNew_FIND_REQUIRED FALSE)
-    set(PythonLibsNew_FOUND TRUE)
+    set(PYBIND11_FINDPYTHON
+        TRUE
+        CACHE BOOL "")
     add_subdirectory(pybind11)
 endif()
 

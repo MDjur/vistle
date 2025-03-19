@@ -7,6 +7,8 @@
 #include <iostream>
 #include <regex>
 
+#include "parametermanager_impl.h"
+
 #define CERR std::cerr << message::Id::name(m_name, m_id) << ": "
 
 namespace vistle {
@@ -292,11 +294,11 @@ bool ParameterManager::updateParameter(const std::string &name, const Parameter 
 
     message::SetParameter set(m_id, name, i->second.param, rt);
     if (inResponseTo) {
+        if (!i->second.owner)
+            return true;
         set.setReferrer(inResponseTo->uuid());
         if (inResponseTo->isDelayed())
             set.setDelayed();
-        if (!i->second.owner)
-            return true;
     }
     set.setDestId(message::Id::ForBroadcast);
     sendParameterMessage(set);

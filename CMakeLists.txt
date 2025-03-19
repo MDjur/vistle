@@ -128,14 +128,6 @@ macro(vistle_find_package package)
     endif()
 
     if("$ENV{SPACK_ENV}" STREQUAL "")
-        if(pack STREQUAL "PythonLibs")
-            set(pack "Python")
-        endif()
-
-        if(pack STREQUAL "PythonInterp")
-            set(pack "Python")
-        endif()
-
         if(pack MATCHES "^Qt5")
             set(pack "Qt5")
             set(hbpack "qt@5")
@@ -178,7 +170,7 @@ macro(vistle_find_package package)
             endif()
 
             if(hbpack STREQUAL "")
-                set(hbpack "${pack}")
+                string(TOLOWER ${pack} hbpack)
             endif()
 
             set(CMAKE_PREFIX_PATH /usr/local/opt/${hbpack} ${CMAKE_PREFIX_PATH})
@@ -418,6 +410,7 @@ if(NOT VISTLE_GUI_ONLY)
         endif()
     endif()
 
+    set(Python_FIND_FRAMEWORK LAST)
     vistle_find_package(Python COMPONENTS Interpreter Development REQUIRED)
     if(Python_FOUND)
         message("Found Python version ${Python_VERSION}")

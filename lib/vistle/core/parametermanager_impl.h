@@ -1,5 +1,5 @@
-#ifndef VISTLE_PARAMETER_MANAGER_IMPL_H
-#define VISTLE_PARAMETER_MANAGER_IMPL_H
+#ifndef VISTLE_CORE_PARAMETERMANAGER_IMPL_H
+#define VISTLE_CORE_PARAMETERMANAGER_IMPL_H
 
 #include <cassert>
 
@@ -28,11 +28,15 @@ bool ParameterManager::setParameter(ParameterBase<T> *param, const T &value, con
     bool delayed = false;
     if (inResponseTo && inResponseTo->isDelayed())
         delayed = true;
+    bool changed = value != param->getValue();
     param->setValue(value, false, delayed);
-    if (!inResponseTo || !inResponseTo->isDelayed())
+    if (!delayed)
         parameterChangedWrapper(param);
     else
         m_delayedChanges.emplace(param->getName(), param);
+    if (!changed) {
+        return true;
+    }
     return updateParameter(param->getName(), param, inResponseTo);
 }
 

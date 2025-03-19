@@ -1,5 +1,5 @@
-#ifndef VISTLE_PARAMETER_MANAGER_H
-#define VISTLE_PARAMETER_MANAGER_H
+#ifndef VISTLE_CORE_PARAMETERMANAGER_H
+#define VISTLE_CORE_PARAMETERMANAGER_H
 
 #include "export.h"
 
@@ -147,7 +147,15 @@ private:
         const std::string &name, const std::string &description, const Type &value, \
         Parameter::Presentation presentation); \
     spec template V_COREEXPORT bool ParameterManager::setParameter<Type>(const std::string &name, const Type &value, \
-                                                                         const message::SetParameter *inResponseTo);
+                                                                         const message::SetParameter *inResponseTo); \
+    spec template V_COREEXPORT bool ParameterManager::setParameter<Type>(ParameterBase<Type> *, Type const &, \
+                                                                         message::SetParameter const *); \
+    spec template V_COREEXPORT bool ParameterManager::setParameterRange<Type>(const std::string &, Type const &, \
+                                                                              Type const &); \
+    spec template V_COREEXPORT bool ParameterManager::setParameterRange<Type>(ParameterBase<Type> *, Type const &, \
+                                                                              Type const &); \
+    spec template V_COREEXPORT bool ParameterManager::setParameterMinimum<Type>(ParameterBase<Type> *, Type const &); \
+    spec template V_COREEXPORT bool ParameterManager::setParameterMaximum<Type>(ParameterBase<Type> *, Type const &);
 
 PARAM_TYPE_TEMPLATE(extern, Integer)
 PARAM_TYPE_TEMPLATE(extern, Float)
@@ -158,5 +166,5 @@ PARAM_TYPE_TEMPLATE(extern, ParameterVector<std::string>)
 
 } // namespace vistle
 
-#include "parametermanager_impl.h"
+//#include "parametermanager_impl.h"
 #endif
