@@ -11,6 +11,8 @@
 #include <vistle/core/points.h>
 #include "vistle/module/module.h"
 #include "vistle/renderer/renderer.h"
+#include "vsg/core/ref_ptr.h"
+#include "vsg/utils/ComputeBounds.h"
 #include <vistle/core/placeholder.h>
 
 //std
@@ -243,8 +245,8 @@ std::vector<vsg::ref_ptr<vsg::StateCommand>> VSGRenderer::setupVulkanGraphicsPip
     auto descriptorSetLayout = vsg::DescriptorSetLayout::create(descriptorBindings);
 
     vsg::PushConstantRanges pushConstantRanges{
-        {VK_SHADER_STAGE_VERTEX_BIT, 0,
-         128} // projection, view, and model matrices, actual push constant calls automatically provided by the VSG's RecordTraversal
+        {VK_SHADER_STAGE_VERTEX_BIT, 0, 128}
+        // projection, view, and model matrices, actual push constant calls automatically provided by the VSG's RecordTraversal
     };
 
     vsg::VertexInputState::Bindings vertexBindingsDescriptions{
@@ -268,17 +270,17 @@ std::vector<vsg::ref_ptr<vsg::StateCommand>> VSGRenderer::setupVulkanGraphicsPip
     vsg::GraphicsPipelineStates pipelineStates{
         vsg::VertexInputState::create(vertexBindingsDescriptions, vertexAttributeDescriptions),
         vsg::InputAssemblyState::create(), rasterization,
-        /* vsg::RasterizationState::create(), */
+        // vsg::RasterizationState::create(),
         vsg::MultisampleState::create(), vsg::ColorBlendState::create(), vsg::DepthStencilState::create()};
 
     // set up search paths to SPIRV shaders and textures
-    vsg::Paths searchPaths = vsg::getEnvPaths("VSG_FILE_PATH");
+    vsg::Paths searchPaths = vsg::getEnvPaths("VISTLE_SHADER_PATH");
 
     // load shaders from vsgExamples => export VSG_FILE_PATH=<path to vsgExamples>/data
     vsg::ref_ptr<vsg::ShaderStage> vertexShader = vsg::ShaderStage::read(
-        VK_SHADER_STAGE_VERTEX_BIT, "main", vsg::findFile("shaders/vert_PushConstants.spv", searchPaths));
+        VK_SHADER_STAGE_VERTEX_BIT, "main", vsg::findFile("vert_PushConstants.spv", searchPaths));
     vsg::ref_ptr<vsg::ShaderStage> fragmentShader = vsg::ShaderStage::read(
-        VK_SHADER_STAGE_FRAGMENT_BIT, "main", vsg::findFile("shaders/frag_PushConstants.spv", searchPaths));
+        VK_SHADER_STAGE_FRAGMENT_BIT, "main", vsg::findFile("frag_PushConstants.spv", searchPaths));
     auto pipelineLayout =
         vsg::PipelineLayout::create(vsg::DescriptorSetLayouts{descriptorSetLayout}, pushConstantRanges);
     auto graphicsPipeline =
@@ -316,7 +318,7 @@ void VSGRenderer::initScene(vsg::ref_ptr<vsg::Node> node, vsg::ref_ptr<vsg::Wind
     // FIXME: at the moment vistle is blocking this event
     m_viewer->addEventHandler(vsg::CloseHandler::create(m_viewer));
     m_viewer->addEventHandler(vsg::WindowResizeHandler::create());
-    m_viewer->addEventHandler(AnimateTimestepSwitch::create(m_timesteps->animated(), m_viewer->start_point()));
+    // m_viewer->addEventHandler(AnimateTimestepSwitch::create(m_timesteps->animated(), m_viewer->start_point()));
 
     // add a trackball event handler to control the camera view use the mouse
     auto main_trackball = vsg::Trackball::create(camera);
@@ -393,8 +395,9 @@ std::shared_ptr<vistle::RenderObject> VSGRenderer::addObject(int senderId, const
                                                              vistle::Object::const_ptr texture)
 {
     auto vro = std::make_shared<VsgRenderObject>(senderId, senderPort, container, geometry, normals, texture);
-    auto t = vro->timestep;
-    m_timesteps->addNode(vro->geo(), t);
+    // auto t = vro->timestep;
+    // m_timesteps->addNode(vro->geo(), t);
+    m_scenegraph->addChild(vro->geo());
     m_renderManager.addObject(vro);
     return vro;
 }
@@ -402,8 +405,9 @@ std::shared_ptr<vistle::RenderObject> VSGRenderer::addObject(int senderId, const
 void VSGRenderer::removeObject(std::shared_ptr<vistle::RenderObject> ro)
 {
     auto vro = std::static_pointer_cast<VsgRenderObject>(ro);
-    auto t = vro->timestep;
-    m_timesteps->removeNode(vro->geo(), t);
+    // auto t = vro->timestep;
+    // m_timesteps->removeNode(vro->geo(), t);
+    // m_scenegraph->remove<vsg::ref_ptr<vsg::Geometry>>(vro->geo());
     m_renderManager.removeObject(vro);
 }
 

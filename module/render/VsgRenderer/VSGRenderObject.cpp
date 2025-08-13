@@ -105,6 +105,7 @@ VsgRenderObject::VsgRenderObject(int senderId, const std::string &senderPort, vi
 
     m_geometry->assignArrays(vsg::DataList{vertices, colors, texcoords});
     m_geometry->assignIndices(indices);
+    // m_geometry->commands.push_back(vsg::DrawIndexed::create(vertices->size(), 1, 0, 0, 0));
     m_geometry->commands.push_back(vsg::DrawIndexed::create(indices->size(), 1, 0, 0, 0));
 
     std::cerr << debug.str() << std::endl;
