@@ -119,7 +119,7 @@ ReadCFX::ReadCFX(const std::string &name, int moduleID, mpi::communicator comm):
                         1, Parameter::Boolean);
 
     //zone selection
-    m_zoneSelection = addStringParameter("zones", "select zone numbers e.g. 1,4,6-10", "all");
+    m_zoneSelection = addStringParameter("zones", "select zone numbers e.g. 1,4,6-10", "all", Parameter::Restraint);
 
     // mesh ports
     m_gridOut = createOutputPort("grid_out1", "volume grid");
@@ -143,7 +143,8 @@ ReadCFX::ReadCFX(const std::string &name, int moduleID, mpi::communicator comm):
         }
     }
     //m_readBoundary = addIntParameter("read_boundary", "load the boundary?", 0, Parameter::Boolean);
-    m_2dAreaSelection = addStringParameter("2d_area", "select boundary or region numbers e.g. 1,4,6-10", "0");
+    m_2dAreaSelection =
+        addStringParameter("2d_area", "select boundary or region numbers e.g. 1,4,6-10", "0", Parameter::Restraint);
 
     // 2d data ports and 2d data choice parameters
     for (int i = 0; i < Num2dPorts; ++i) {
@@ -164,7 +165,8 @@ ReadCFX::ReadCFX(const std::string &name, int moduleID, mpi::communicator comm):
     }
 
     //particle selection
-    m_particleSelection = addStringParameter("particle_type", "select particle type e.g. 1,4,6-10", "0");
+    m_particleSelection =
+        addStringParameter("particle_type", "select particle type e.g. 1,4,6-10", "0", Parameter::Restraint);
     m_particleTime = createOutputPort("particle_time", "particle time");
 
     // particle data ports and particle choice parameters
@@ -1452,7 +1454,7 @@ bool ReadCFX::loadFields(UnstructuredGrid::ptr grid, int area3d, int setMetaTime
                 setMeta(obj, area3d, setMetaTimestep, timestep, numTimesteps, numSel3dArea, readTransientFile, t);
                 obj->setGrid(grid);
             }
-            obj->addAttribute("_species", field);
+            obj->addAttribute(attribute::Species, field);
             m_currentVolumedata[i] = obj;
         }
     }
@@ -1491,7 +1493,7 @@ bool ReadCFX::load2dFields(Polygons::ptr polyg, int area2d, int setMetaTimestep,
                 obj->setMapping(DataBase::Vertex);
                 obj->setGrid(polyg);
             }
-            obj->addAttribute("_species", area2dField);
+            obj->addAttribute(attribute::Species, area2dField);
             m_current2dData[i] = obj;
         }
     }

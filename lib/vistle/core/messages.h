@@ -46,6 +46,7 @@ public:
                                         (RENDERCLIENT) //< remote render client
                                         (VRB) //< COVISE/OpenCOVER request broker for collaborative VR
                                         (TUNNEL) //< initiate rendezvous tunnel connection
+                                        (SCRIPT) //< sent from a Python script
     )
     DEFINE_ENUM_WITH_STRING_CONVERSIONS(TunnelRole, (Client)(Server))
 
@@ -188,7 +189,7 @@ private:
 //! spawn a module
 class V_COREEXPORT Spawn: public MessageBase<Spawn, SPAWN> {
 public:
-    enum ReferenceType { None, Migrate, Mirror, Clone, LinkedClone };
+    enum ReferenceType { None, Migrate, Clone, LinkedClone };
     Spawn(int hubId, const std::string &name, int size = -1, int baserank = -1, int rankskip = -1);
     void setReference(int id, ReferenceType type);
     int getReference() const;
@@ -226,6 +227,8 @@ private:
     int m_referenceId = Id::Invalid;
     //! id of module that is being mirrored (for replicating COVER renderer on clusters with UI)
     int m_referenceType = (int)ReferenceType::None;
+    //! id of mirror group (for replicating COVER renderer on clusters with UI)
+    int m_mirrorId = Id::Invalid;
     //! name of module to be started
     module_name_t name;
 };
@@ -315,11 +318,14 @@ public:
     ModuleExit(bool crashed = false);
     void setForwarded();
     bool isForwarded() const;
+    void setLeaveMirrorGroup(bool leave);
+    bool leaveMirrorGroup() const;
     bool isCrashed() const;
 
 private:
-    bool forwarded = false;
-    bool crashed = false;
+    int m_forwarded = 0;
+    int m_crashed = 0;
+    int m_leaveMirrorGroup = 0;
 };
 
 //! instruct GUI to store a snapshot of the rendered workflow
@@ -722,7 +728,12 @@ V_ENUM_OUTPUT_OP(TextType, SendText)
 class V_COREEXPORT ItemInfo: public MessageBase<ItemInfo, ITEMINFO> {
 public:
     DEFINE_ENUM_WITH_STRING_CONVERSIONS(
-        InfoType, (Unspecified)(Module)(Port)(PortType)(PortMapped)(PortGeometry)(PortMapping)(PortSpecies))
+        InfoType,
+        (Unspecified)(Module)(Port)(PortType)(PortMapped)(PortGeometry)(PortMapping)(PortSpecies)(PortEnableState))
+
+    // for PortEnableState
+    // Enabled = default = 0 has to remain first
+    DEFINE_ENUM_WITH_STRING_CONVERSIONS(PortState, (Enabled)(Disabled)(Optional))
 
     struct V_COREEXPORT Payload {
         Payload();
@@ -740,13 +751,17 @@ public:
 
     //! Error message in response to a Message
     explicit ItemInfo(InfoType type, const std::string port = std::string());
+    ItemInfo(const std::string &port, PortState state); //!< for PortEnableState
 
     InfoType infoType() const;
     const char *port() const;
+    PortState portEnableState() const; //!< for PortEnableState
 
 private:
     //! type of text
     InfoType m_infoType;
+    //! numeric flag for additional information, if required (e.g. PortState for PortEnableState)
+    int m_infoFlag;
     //! name of port, if any
     port_name_t m_port;
 };
@@ -982,6 +997,7 @@ public:
     const char *referrer() const;
     const Meta &meta() const;
     Object::Type objectType() const;
+    int arrayType() const;
     Meta objectMeta() const;
     bool isArray() const;
 
@@ -1092,4 +1108,6 @@ private:
 } // namespace vistle
 
 #pragma pack(pop)
+
+#include "message/setname.h"
 #endif

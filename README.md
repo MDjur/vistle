@@ -7,6 +7,8 @@ Vistle - A Modular Data-Parallel Visualization System
 > **vistle**:
 >	very smooth and elegant, nicely put together ([Urban Dictionary](https://www.urbandictionary.com/define.php?term=vistle))
 
+[Vistle](https://vistle.io) is an extensible software environment that integrates simulations on supercomputers, post-processing and parallel interactive visualization in immersive virtual environments. Vistle development is driven by [HLRS](https://www.hlrs.de) since 2012.
+
 
 License
 -------
@@ -144,6 +146,9 @@ You can connect a user interface to a running Vistle session later on, e.g.:
 Source Code Organization
 ------------------------
 
+- `doc`:
+  documentation and tooling for building documentation
+
 - `cmake`:
   CMake modules
 
@@ -175,7 +180,7 @@ Source Code Organization
   visualization algorithm modules and base library
 
     - `module/general`: modules useful to a wider audience
-    - `module/test`: various debugging aids
+    - `module/develop`: various debugging aids
     - `module/render`: renderer modules transforming geometry into pixels
         - `module/render/DisCOVERay`: a parallel remote hybrid rendering server based on [Embree](https://www.embree.org) (CPU ray-casting)
         - `module/render/OsgRenderer`: a parallel remote hybrid rendering server based on OpenSceneGraph (OpenGL)

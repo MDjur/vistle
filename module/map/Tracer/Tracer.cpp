@@ -23,17 +23,17 @@
 #include <vistle/alg/objalg.h>
 #include <vistle/util/threadname.h>
 
-MODULE_MAIN(Tracer)
-
-
 using namespace vistle;
 namespace mpi = boost::mpi;
 
+
 DEFINE_ENUM_WITH_STRING_CONVERSIONS(StartStyle, (Line)(Plane)(Cylinder))
-
 DEFINE_ENUM_WITH_STRING_CONVERSIONS(TraceDirection, (Both)(Forward)(Backward))
-
 DEFINE_ENUM_WITH_STRING_CONVERSIONS(ParticlePlacement, (InitialRank)(RankById)(RankByTimestep)(Rank0))
+
+typedef Particle<double> ParticleT;
+
+static_assert(Tracer::NumPorts == BlockData::NumFields);
 
 template<class Value>
 bool agree(const boost::mpi::communicator &comm, const Value &value)
@@ -64,22 +64,36 @@ bool agree(const boost::mpi::communicator &comm, const Value &value)
     return mismatch == 0;
 }
 
+DEFINE_ENUM_WITH_STRING_CONVERSIONS(
+    AddDataKind, (None)(ParticleId)(Step)(Time)(StepWidth)(Distance)(TerminationReason)(CellIndex)(BlockIndex))
+
 Tracer::Tracer(const std::string &name, int moduleID, mpi::communicator comm): Module(name, moduleID, comm)
 {
     setReducePolicy(message::ReducePolicy::PerTimestep);
 
-    createInputPort("data_in0", "vector field");
-    createInputPort("data_in1", "additional field on same geometry");
-    createOutputPort("data_out0", "stream lines or points with mapped vector");
-    createOutputPort("data_out1", "stream lines or points with mapped field");
-    createOutputPort("particle_id", "stream lines or points with mapped particle id");
-    createOutputPort("step", "stream lines or points with step number");
-    createOutputPort("time", "stream lines or points with time");
-    createOutputPort("stepwidth", "stream lines or points with stepwidth");
-    createOutputPort("distance", "stream lines or points with accumulated distance");
-    createOutputPort("stop_reason", "stream lines or points with reason for finishing trace");
-    createOutputPort("cell_index", "stream lines or points with cell index");
-    createOutputPort("block_index", "stream lines or points with block index");
+    m_inPort[0] = createInputPort("data_in0", "vector field");
+    m_outPort[0] = createOutputPort("data_out0", "stream lines or points with mapped vector");
+    linkPorts(m_inPort[0], m_outPort[0]);
+    for (int i = 1; i < NumPorts; ++i) {
+        m_inPort[i] = createInputPort("data_in" + std::to_string(i), "additional field on same geometry");
+        m_outPort[i] = createOutputPort("data_out" + std::to_string(i), "stream lines or points with mapped field");
+        linkPorts(m_inPort[i], m_outPort[i]);
+        setPortOptional(m_inPort[i], true);
+    }
+    for (int i = 0; i < NumAddPorts; ++i) {
+        m_addPort[i] = createOutputPort("add_data_out" + std::to_string(i), "computed field on same geometry");
+        linkPorts(m_inPort[0], m_addPort[i]);
+        m_addField[i] = addIntParameter("add_data_kind" + std::to_string(i), "field to compute", 0, Parameter::Choice);
+        V_ENUM_SET_CHOICES(m_addField[i], AddDataKind);
+    }
+    addDescription(ParticleId, "particle_id", "stream lines or points with mapped particle id");
+    addDescription(Step, "step", "stream lines or points with step number");
+    addDescription(Time, "time", "stream lines or points with time");
+    addDescription(StepWidth, "stepwidth", "stream lines or points with stepwidth");
+    addDescription(Distance, "distance", "stream lines or points with accumulated distance");
+    addDescription(TerminationReason, "stop_reason", "stream lines or points with reason for finishing trace");
+    addDescription(CellIndex, "cell_index", "stream lines or points with cell index");
+    addDescription(BlockIndex, "block_index", "stream lines or points with block index");
 
 #if 0
     const char *TracerInteraction::P_DIRECTION = "direction";
@@ -160,24 +174,53 @@ Tracer::Tracer(const std::string &name, int moduleID, mpi::communicator comm): M
 Tracer::~Tracer()
 {}
 
+void Tracer::addDescription(int kind, const std::string &name, const std::string &description)
+{
+    m_addFieldName[kind] = name;
+    m_addFieldDescription[kind] = name;
+}
+
+const std::string &Tracer::getFieldName(int kind) const
+{
+    auto it = m_addFieldName.find(kind);
+    if (it != m_addFieldName.end()) {
+        return it->second;
+    }
+    static const std::string empty;
+    return empty;
+}
+
+const std::string &Tracer::getFieldDescription(int kind) const
+{
+    auto it = m_addFieldDescription.find(kind);
+    if (it != m_addFieldDescription.end()) {
+        return it->second;
+    }
+    static const std::string empty;
+    return empty;
+}
 
 bool Tracer::prepare()
 {
-    m_havePressure = true;
     m_haveTimeSteps = false;
 
     grid_in.clear();
     celltree.clear();
     data_in0.clear();
-    data_in1.clear();
 
     m_gridAttr.clear();
-    m_data0Attr.clear();
-    m_data1Attr.clear();
-
     m_gridTime.clear();
-    m_data0Time.clear();
-    m_data1Time.clear();
+    for (int i = 0; i < NumPorts; ++i) {
+        data_in[i].clear();
+        m_dataAttr[i].clear();
+        m_dataTime[i].clear();
+        data_dim[i] = 0;
+    }
+
+    m_stopReasonCount.clear();
+    m_stopReasonCount.resize(NumStopReasons, 0);
+    m_numTotalParticles = 0;
+    m_stopStatsPrinted = false;
 
     m_numStartpointsPrinted = false;
 
@@ -204,7 +247,11 @@ bool Tracer::compute()
 {
     bool useCelltree = m_useCelltree->getValue();
     auto data0 = expect<Vec<Scalar, 3>>("data_in0");
-    auto data1 = accept<Vec<Scalar>>("data_in1");
+    DataBase::const_ptr data[NumPorts];
+    data[0] = std::dynamic_pointer_cast<const DataBase>(data0);
+    for (int i = 1; i < NumPorts; ++i) {
+        data[i] = accept<DataBase>("data_in" + std::to_string(i));
+    }
 
     if (!data0)
         return true;
@@ -235,17 +282,18 @@ bool Tracer::compute()
         grid_in.resize(numSteps + 1);
         celltree.resize(numSteps + 1);
         data_in0.resize(numSteps + 1);
-        data_in1.resize(numSteps + 1);
+        for (int i = 0; i < NumPorts; ++i) {
+            data_in[i].resize(numSteps + 1);
+        }
     }
 
     if (m_gridAttr.size() < numSteps + 1) {
         m_gridAttr.resize(numSteps + 1);
-        m_data0Attr.resize(numSteps + 1);
-        m_data1Attr.resize(numSteps + 1);
-
         m_gridTime.resize(numSteps + 1);
-        m_data0Time.resize(numSteps + 1);
-        m_data1Time.resize(numSteps + 1);
+        for (int i = 0; i < NumPorts; ++i) {
+            m_dataAttr[i].resize(numSteps + 1);
+            m_dataTime[i].resize(numSteps + 1);
+        }
     }
 
     if (useCelltree) {
@@ -276,14 +324,17 @@ bool Tracer::compute()
     }
 
     collectAttributes(m_gridAttr[t + 1], m_gridTime[t + 1], grid);
-    collectAttributes(m_data0Attr[t + 1], m_data0Time[t + 1], data0);
-    collectAttributes(m_data1Attr[t + 1], m_data1Time[t + 1], data1);
+    for (int i = 0; i < NumPorts; ++i) {
+        collectAttributes(m_dataAttr[i][t + 1], m_dataTime[i][t + 1], data[i]);
+    }
 
     grid_in[t + 1].push_back(grid);
     data_in0[t + 1].push_back(data0);
-    data_in1[t + 1].push_back(data1);
-    if (!data1)
-        m_havePressure = false;
+    for (int i = 0; i < NumPorts; ++i) {
+        data_in[i][t + 1].push_back(data[i]);
+        if (data_dim[i] == 0 && data[i])
+            data_dim[i] = data[i]->dimension();
+    }
 
     return true;
 }
@@ -311,6 +362,23 @@ void applyAttributes(vistle::Object::ptr obj, const Tracer::AttributeMap &attrs)
 
 bool Tracer::reduce(int timestep)
 {
+    auto printGlobalStopStats = [this, timestep]() {
+        if (rank() == 0 && timestep == -1 && !m_stopStatsPrinted) {
+            std::stringstream str;
+            str << "Stop stats for " << m_numTotalParticles << " particles in " << numTimesteps() << " timesteps:";
+            for (size_t i = 0; i < m_stopReasonCount.size(); ++i) {
+                str << " " << toString((StopReason)i) << ":" << m_stopReasonCount[i];
+            }
+            std::string s = str.str();
+            if (m_verbose->getValue() || m_stopReasonCount[InitiallyOutOfDomain] > 0) {
+                sendInfo("%s", s.c_str());
+            } else {
+                std::cerr << s << std::endl;
+            }
+        }
+    };
+    printGlobalStopStats();
+
     if (timestep == -1 && numTimesteps() > 0 && reducePolicy() == message::ReducePolicy::PerTimestep) {
         // all the work for stream lines has already be done per timestep
         return true;
@@ -319,28 +387,27 @@ bool Tracer::reduce(int timestep)
     size_t minsize = std::max(numTimesteps() + 1, timestep + 2);
     if (m_gridAttr.size() < minsize) {
         m_gridAttr.resize(minsize);
-        m_data0Attr.resize(minsize);
-        m_data1Attr.resize(minsize);
-
         m_gridTime.resize(minsize);
-        m_data0Time.resize(minsize);
-        m_data1Time.resize(minsize);
-    }
-
-    if (timestep == -1) {
-        for (int i = 0; i < numTimesteps(); ++i) {
-            mergeAttributes(m_gridAttr[0], m_gridAttr[i + 1]);
-            mergeAttributes(m_data0Attr[0], m_data0Attr[i + 1]);
-            mergeAttributes(m_data1Attr[0], m_data1Attr[i + 1]);
+        for (int i = 0; i < NumPorts; ++i) {
+            m_dataAttr[i].resize(minsize);
+            m_dataTime[i].resize(minsize);
         }
     }
 
+    if (timestep == -1) {
+        for (int t = 0; t < numTimesteps(); ++t) {
+            mergeAttributes(m_gridAttr[0], m_gridAttr[t + 1]);
+            for (int i = 0; i < NumPorts; ++i) {
+                mergeAttributes(m_dataAttr[i][0], m_dataAttr[i][t + 1]);
+            }
+        }
+    }
+    for (int i = 0; i < NumPorts; ++i) {
+        data_dim[i] = mpi::all_reduce(comm(), data_dim[i], mpi::maximum<int>());
+    }
+
     int attrGridRank = m_gridAttr[timestep + 1].empty() ? size() : rank();
-    int attrData0Rank = m_data0Attr[timestep + 1].empty() ? size() : rank();
-    int attrData1Rank = m_data1Attr[timestep + 1].empty() ? size() : rank();
     attrGridRank = mpi::all_reduce(comm(), attrGridRank, mpi::minimum<int>());
-    attrData0Rank = mpi::all_reduce(comm(), attrData0Rank, mpi::minimum<int>());
-    attrData1Rank = mpi::all_reduce(comm(), attrData1Rank, mpi::minimum<int>());
     if (attrGridRank == size()) {
         attrGridRank = m_gridTime[timestep + 1].timeStep() < 0 ? size() : rank();
         attrGridRank = mpi::all_reduce(comm(), attrGridRank, mpi::minimum<int>());
@@ -348,31 +415,26 @@ bool Tracer::reduce(int timestep)
     if (attrGridRank == size()) {
         attrGridRank = 0;
     }
-    if (attrData0Rank == size()) {
-        attrData0Rank = m_data0Time[timestep + 1].timeStep() < 0 ? size() : rank();
-        attrData0Rank = mpi::all_reduce(comm(), attrData0Rank, mpi::minimum<int>());
-    }
-    if (attrData0Rank == size()) {
-        attrData0Rank = 0;
-    }
-    if (attrData1Rank == size()) {
-        attrData1Rank = m_data1Time[timestep + 1].timeStep() < 0 ? size() : rank();
-        attrData1Rank = mpi::all_reduce(comm(), attrData1Rank, mpi::minimum<int>());
-    }
-    if (attrData1Rank == size()) {
-        attrData1Rank = 0;
-    }
     if (attrGridRank != size()) {
         mpi::broadcast(comm(), m_gridAttr[timestep + 1], attrGridRank);
         mpi::broadcast(comm(), m_gridTime[timestep + 1], attrGridRank);
     }
-    if (attrData0Rank != size()) {
-        mpi::broadcast(comm(), m_data0Attr[timestep + 1], attrData0Rank);
-        mpi::broadcast(comm(), m_data0Time[timestep + 1], attrData0Rank);
-    }
-    if (attrData1Rank != size()) {
-        mpi::broadcast(comm(), m_data1Attr[timestep + 1], attrData1Rank);
-        mpi::broadcast(comm(), m_data1Time[timestep + 1], attrData1Rank);
+
+    int attrDataRank[NumPorts];
+    for (int i = 0; i < NumPorts; ++i) {
+        attrDataRank[i] = m_dataAttr[i][timestep + 1].empty() ? size() : rank();
+        attrDataRank[i] = mpi::all_reduce(comm(), attrDataRank[i], mpi::minimum<int>());
+        if (attrDataRank[i] == size()) {
+            attrDataRank[i] = m_dataTime[i][timestep + 1].timeStep() < 0 ? size() : rank();
+            attrDataRank[i] = mpi::all_reduce(comm(), attrDataRank[i], mpi::minimum<int>());
+        }
+        if (attrDataRank[i] == size()) {
+            attrDataRank[i] = 0;
+        }
+        if (attrDataRank[i] != size()) {
+            mpi::broadcast(comm(), m_dataAttr[i][timestep + 1], attrDataRank[i]);
+            mpi::broadcast(comm(), m_dataTime[i][timestep + 1], attrDataRank[i]);
+        }
     }
 
     //get parameters
@@ -484,20 +546,48 @@ bool Tracer::reduce(int timestep)
     global.cell_index_modulus = getIntParameter("cell_index_modulus");
     global.simplification_error = getFloatParameter("simplification_error");
 
-    global.computeVector = isConnected("data_out0");
-    global.computeScalar = isConnected("data_out1");
-    global.computeId = isConnected("particle_id");
-    global.computeStep = isConnected("step");
-    global.computeStopReason = isConnected("stop_reason");
-    global.computeCellIndex = isConnected("cell_index");
-    global.computeBlockIndex = isConnected("block_index");
-    global.computeTime = isConnected("time");
-    global.computeDist = isConnected("distance");
-    global.computeStepWidth = isConnected("stepwidth");
+    global.computeVector = isConnected(*m_outPort[0]);
+    global.computeField[0] = global.computeVector;
+    global.fields.resize(NumPorts);
+    global.numScalars = 0;
+    for (int i = 1; i < NumPorts; ++i) {
+        global.computeField[i] = isConnected(*m_outPort[i]);
+        global.numScalars += global.computeField[i] ? data_dim[i] : 0;
+    }
+    for (int i = 0; i < NumAddPorts; ++i) {
+        if (!isConnected(*m_addPort[i])) {
+            continue;
+        }
+        switch (m_addField[i]->getValue()) {
+        case ParticleId:
+            global.computeId = true;
+            break;
+        case Step:
+            global.computeStep = true;
+            break;
+        case Time:
+            global.computeTime = true;
+            break;
+        case StepWidth:
+            global.computeStepWidth = true;
+            break;
+        case Distance:
+            global.computeDist = true;
+            break;
+        case TerminationReason:
+            global.computeStopReason = true;
+        case CellIndex:
+            global.computeCellIndex = true;
+            break;
+        case BlockIndex:
+            global.computeBlockIndex = true;
+            break;
+        }
+    }
 
-    std::vector<Index> stopReasonCount(Particle::NumStopReasons, 0);
-    std::vector<std::shared_ptr<Particle>> allParticles;
-    std::set<std::shared_ptr<Particle>> localParticles, activeParticles;
+    std::vector<Index> stopReasonCount(NumStopReasons, 0);
+    std::vector<std::shared_ptr<ParticleT>> allParticles;
+    std::set<std::shared_ptr<ParticleT>> localParticles, activeParticles;
 
     Index numconstant = grid_in.size() ? grid_in[0].size() : 0;
     for (Index i = 0; i < numconstant; ++i) {
@@ -530,29 +620,39 @@ bool Tracer::reduce(int timestep)
 
         //create BlockData objects
         global.blocks[t].resize(numblocks + numconstant);
-        for (Index i = 0; i < numconstant; i++) {
-            global.blocks[t][i].reset(new BlockData(i, grid_in[0][i], data_in0[0][i], data_in1[0][i]));
-        }
-        for (Index i = 0; i < numblocks; i++) {
-            if (useCelltree && celltree.size() > size_t(t + 1)) {
-                if (celltree[t + 1].size() > i && celltree[t + 1][i].valid())
-                    celltree[t + 1][i].get();
+        for (Index b = 0; b < numconstant; b++) {
+            DataBase::const_ptr din[NumPorts];
+            for (int i = 0; i < NumPorts; ++i) {
+                din[i] = data_in[i][0][b];
             }
-            global.blocks[t][i + numconstant].reset(
-                new BlockData(i + numconstant, grid_in[t + 1][i], data_in0[t + 1][i], data_in1[t + 1][i]));
+            global.blocks[t][b].reset(new BlockData(b, grid_in[0][b], data_in0[0][b], din));
+        }
+        for (Index b = 0; b < numblocks; b++) {
+            if (useCelltree && celltree.size() > size_t(t + 1)) {
+                if (celltree[t + 1].size() > b && celltree[t + 1][b].valid())
+                    celltree[t + 1][b].get();
+            }
+            DataBase::const_ptr din[NumPorts];
+            for (int i = 0; i < NumPorts; ++i) {
+                din[i] = data_in[i][t + 1][b];
+            }
+            global.blocks[t][b + numconstant].reset(
+                new BlockData(b + numconstant, grid_in[t + 1][b], data_in0[t + 1][b], din));
         }
 
-        //create particle objects, 2 if traceDirecton==Both
+        //create particle objects, 2 if traceDirection==Both
         allParticles.reserve(allParticles.size() + numparticles);
         Index i = 0;
         for (; i < numpoints; i++) {
             if (rankById)
                 rank = i % size();
             if (traceDirection != Backward) {
-                allParticles.emplace_back(new Particle(id++, rank, i, startpoints[i], true, global, t));
+                allParticles.emplace_back(new ParticleT(id++, rank, i, startpoints[i], true, global, t));
+                ++m_numTotalParticles;
             }
             if (traceDirection != Forward) {
-                allParticles.emplace_back(new Particle(id++, rank, i, startpoints[i], false, global, t));
+                allParticles.emplace_back(new ParticleT(id++, rank, i, startpoints[i], false, global, t));
+                ++m_numTotalParticles;
             }
         }
     }
@@ -580,7 +680,7 @@ bool Tracer::reduce(int timestep)
                     }
                 }
             } else {
-                particle->Deactivate(Particle::InitiallyOutOfDomain);
+                particle->Deactivate(InitiallyOutOfDomain);
             }
         }
         return started;
@@ -608,7 +708,7 @@ bool Tracer::reduce(int timestep)
             first = false;
             if (!particle->isTracing(wait)) {
                 if (mpisize == 1) {
-                    particle->Deactivate(Particle::OutOfDomain);
+                    particle->Deactivate(OutOfDomain);
                 } else if (particle->madeProgress()) {
                     sendlist.push_back(particle->id());
                 }
@@ -652,7 +752,7 @@ bool Tracer::reduce(int timestep)
                     p->finishSegment();
                     int r = p->searchRank(comm());
                     if (r < 0) {
-                        p->Deactivate(Particle::OutOfDomain);
+                        p->Deactivate(OutOfDomain);
                     } else if (r == rank()) {
                         if (activeParticles.size() < maxNumActive) {
                             activeParticles.emplace(p);
@@ -743,18 +843,30 @@ bool Tracer::reduce(int timestep)
 
         if (global.computeVector) {
             global.vecField.emplace_back(new Vec<Scalar, 3>(size_t(0)));
-            applyAttributes(global.vecField.back(), m_data0Attr[timestep + 1]);
+            applyAttributes(global.vecField.back(), m_dataAttr[0][timestep + 1]);
             if (taskType == MovingPoints) {
                 global.vecField.back()->x().reserve(allParticles.size());
                 global.vecField.back()->y().reserve(allParticles.size());
                 global.vecField.back()->z().reserve(allParticles.size());
             }
         }
-        if (global.computeScalar) {
-            global.scalField.emplace_back(new Vec<Scalar>(size_t(0)));
-            applyAttributes(global.scalField.back(), m_data1Attr[timestep + 1]);
-            if (taskType == MovingPoints) {
-                global.scalField.back()->x().reserve(allParticles.size());
+        for (int i = 1; i < NumPorts; ++i) {
+            if (global.computeField[i]) {
+                if (data_dim[i] == 3) {
+                    auto vec = std::make_shared<Vec<Scalar, 3>>(size_t(0));
+                    global.fields[i].emplace_back(vec);
+                    if (taskType == MovingPoints) {
+                        vec->x().reserve(allParticles.size());
+                        vec->y().reserve(allParticles.size());
+                        vec->z().reserve(allParticles.size());
+                    }
+                } else {
+                    auto scal = std::make_shared<Vec<Scalar>>(size_t(0));
+                    global.fields[i].emplace_back(scal);
+                    if (taskType == MovingPoints) {
+                        scal->x().reserve(allParticles.size());
+                    }
+                }
             }
         }
         if (global.computeId) {
@@ -826,19 +938,21 @@ bool Tracer::reduce(int timestep)
         if (global.computeVector) {
             if (taskType == Streamlines) {
                 assert(!global.vecField.empty());
-                applyAttributes(global.vecField.back(), m_data0Attr[timestep + 1]);
+                applyAttributes(global.vecField.back(), m_dataAttr[0][timestep + 1]);
             } else {
                 assert(global.vecField.size() > size_t(idx));
-                applyAttributes(global.vecField[idx], m_data0Attr[timestep + 1]);
+                applyAttributes(global.vecField[idx], m_dataAttr[0][timestep + 1]);
             }
         }
-        if (global.computeScalar) {
+        for (int i = 1; i < NumPorts; ++i) {
+            if (!global.computeField[i])
+                continue;
             if (taskType == Streamlines) {
-                assert(!global.scalField.empty());
-                applyAttributes(global.scalField.back(), m_data1Attr[timestep + 1]);
+                assert(!global.fields[i].empty());
+                applyAttributes(global.fields[i].back(), m_dataAttr[i][timestep + 1]);
             } else {
-                assert(global.scalField.size() > size_t(idx));
-                applyAttributes(global.scalField[idx], m_data1Attr[timestep + 1]);
+                assert(global.fields[i].size() > size_t(idx));
+                applyAttributes(global.fields[i][idx], m_dataAttr[i][timestep + 1]);
             }
         }
     }
@@ -865,10 +979,10 @@ bool Tracer::reduce(int timestep)
             continue;
 
         if (taskType == Streamlines) {
-            if (m_data0Time[timestep + 1].timeStep() >= 0) {
-                meta.setNumTimesteps(m_data0Time[timestep + 1].numTimesteps());
-                meta.setTimeStep(m_data0Time[timestep + 1].timeStep());
-                meta.setRealTime(m_data0Time[timestep + 1].realTime());
+            if (m_dataTime[0][timestep + 1].timeStep() >= 0) {
+                meta.setNumTimesteps(m_dataTime[0][timestep + 1].numTimesteps());
+                meta.setTimeStep(m_dataTime[i][timestep + 1].timeStep());
+                meta.setRealTime(m_dataTime[i][timestep + 1].realTime());
             } else {
                 meta.setNumTimesteps(m_gridTime[timestep + 1].numTimesteps());
                 meta.setTimeStep(m_gridTime[timestep + 1].timeStep());
@@ -883,68 +997,87 @@ bool Tracer::reduce(int timestep)
         geo->setMeta(meta);
         updateMeta(geo);
 
-        auto addField = [this, geo, meta](const char *name, DataBase::ptr field) {
-            field->setGrid(geo);
-            field->setMeta(meta);
-            field->addAttribute("_species", name);
-            updateMeta(field);
-            addObject(name, field);
-        };
+        for (int i = 0; i < NumAddPorts; ++i) {
+            DataBase::ptr field;
+            if (m_addField[i]->getValue() == ParticleId) {
+                field = global.idField[i];
+            } else if (m_addField[i]->getValue() == Step) {
+                field = global.stepField[i];
+            } else if (m_addField[i]->getValue() == Time) {
+                field = global.timeField[i];
+            } else if (m_addField[i]->getValue() == StepWidth) {
+                field = global.stepWidthField[i];
+            } else if (m_addField[i]->getValue() == Distance) {
+                field = global.distField[i];
+            } else if (m_addField[i]->getValue() == TerminationReason) {
+                field = global.stopReasonField[i];
+            } else if (m_addField[i]->getValue() == CellIndex) {
+                field = global.cellField[i];
+            } else if (m_addField[i]->getValue() == BlockIndex) {
+                field = global.blockField[i];
+            }
 
-        if (global.computeId) {
-            addField("particle_id", global.idField[i]);
-        }
-        if (global.computeStep) {
-            addField("step", global.stepField[i]);
-        }
-        if (global.computeTime) {
-            addField("time", global.timeField[i]);
-        }
-        if (global.computeDist) {
-            addField("distance", global.distField[i]);
-        }
-        if (global.computeStepWidth) {
-            addField("stepwidth", global.stepWidthField[i]);
-        }
-        if (global.computeStopReason) {
-            addField("stop_reason", global.stopReasonField[i]);
-        }
-        if (global.computeCellIndex) {
-            addField("cell_index", global.cellField[i]);
-        }
-        if (global.computeBlockIndex) {
-            addField("block_index", global.blockField[i]);
+            if (isConnected(*m_addPort[i])) {
+                if (field) {
+                    bool initField = true;
+                    for (int j = 0; j < i; ++j) {
+                        if (m_addField[j]->getValue() == m_addField[i]->getValue()) {
+                            initField = false;
+                            break;
+                        }
+                    }
+                    if (initField) {
+                        field->setGrid(geo);
+                        field->setMeta(meta);
+                        auto kind = m_addField[i]->getValue();
+                        field->addAttribute(attribute::Species, getFieldName(kind));
+                        updateMeta(field);
+                    }
+                    addObject(m_addPort[i], field);
+                } else {
+                    addObject(m_addPort[i], geo);
+                }
+            }
         }
 
         if (global.computeVector) {
             global.vecField[i]->setGrid(geo);
             global.vecField[i]->setMeta(meta);
             updateMeta(global.vecField[i]);
-            addObject("data_out0", global.vecField[i]);
+            addObject(m_outPort[0], global.vecField[i]);
         }
 
-        if (global.computeScalar) {
-            global.scalField[i]->setGrid(geo);
-            global.scalField[i]->setMeta(meta);
-            updateMeta(global.scalField[i]);
-            addObject("data_out1", global.scalField[i]);
+        for (int p = 1; p < NumPorts; ++p) {
+            if (!global.computeField[p]) {
+                continue;
+            }
+            global.fields[p][i]->setGrid(geo);
+            global.fields[p][i]->setMeta(meta);
+            updateMeta(global.fields[p][i]);
+            addObject(m_outPort[p], global.fields[p][i]);
         }
     }
 
     if (rank() == 0) {
+        for (size_t i = 0; i < stopReasonCount.size(); ++i) {
+            m_stopReasonCount[i] += stopReasonCount[i];
+        }
+
         std::stringstream str;
         str << "Stop stats for " << allParticles.size() << " particles:";
         for (size_t i = 0; i < stopReasonCount.size(); ++i) {
-            str << " " << Particle::toString((Particle::StopReason)i) << ":" << stopReasonCount[i];
+            str << " " << toString((StopReason)i) << ":" << stopReasonCount[i];
         }
         if (m_verbose->getValue() == false) {
             std::cerr << str.str() << std::endl;
         } else {
+            m_stopStatsPrinted = true;
             std::string s = str.str();
             sendInfo("%s", s.c_str());
         }
     }
 
+    printGlobalStopStats();
     return true;
 }
 
@@ -974,3 +1107,5 @@ bool Tracer::changeParameter(const Parameter *param)
     }
     return Module::changeParameter(param);
 }
+
+MODULE_MAIN(Tracer)

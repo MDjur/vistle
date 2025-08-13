@@ -37,7 +37,7 @@ MODULE_MAIN(ReadCovise)
 
 namespace {
 const std::string extension(".covise");
-const std::string NONE("(none)");
+const std::string NONE = vistle::Reader::InvalidChoice;
 } // namespace
 
 using namespace vistle;
@@ -54,6 +54,7 @@ ReadCovise::ReadCovise(const std::string &name, int moduleID, mpi::communicator 
     m_fieldFile[0] = m_gridFile;
 #endif
     m_out[0] = createOutputPort("grid_out", "grid or geometry");
+    linkPortAndParameter(m_out[0], m_fieldFile[0]);
 
 #ifdef READ_DIRECTORY
     m_fieldFile[1] = addStringParameter("normals", "name of COVISE file for normals", NONE, Parameter::Choice);
@@ -74,6 +75,7 @@ ReadCovise::ReadCovise(const std::string &name, int moduleID, mpi::communicator 
         setParameterFilters(m_fieldFile[i], "COVISE Files (*.covise)");
 #endif
         m_out[i] = createOutputPort("field" + std::to_string(i - 2) + "_out", "data mapped to geometry");
+        linkPortAndParameter(m_out[i], m_fieldFile[i]);
     }
 
 #ifdef READ_DIRECTORY
@@ -324,7 +326,7 @@ void ReadCovise::applyAttributes(Token &token, Object::ptr obj, const Element &e
         if (att.first == "TIMESTEP") {
             isTimestep = true;
         } else if (att.first == "COLOR") {
-            obj->addAttribute("_color", att.second);
+            obj->addAttribute(attribute::Color, att.second);
         } else {
             obj->addAttribute(att.first, att.second);
         }
@@ -349,13 +351,13 @@ void ReadCovise::applyAttributes(Token &token, Object::ptr obj, const Element &e
         token.applyMeta(obj);
 
         if (!isTimestep) {
-            std::string set = obj->getAttribute("_part_of");
+            std::string set = obj->getAttribute(attribute::PartOf);
             if (!set.empty())
                 set = set + "_";
             std::stringstream idx;
             idx << index;
             set = set + idx.str();
-            obj->addAttribute("_part_of", set);
+            obj->addAttribute(attribute::PartOf, set);
         }
     }
 }
@@ -1189,7 +1191,7 @@ bool ReadCovise::readRecursive(Token &token, int fd[], Element *elem[], int time
         for (unsigned port = 0; port < NumPorts; ++port) {
             if (m_out[port] && obj[port]) {
                 if (port > 1 || !gridOnPort0)
-                    obj[port]->addAttribute("_species", m_species[port]);
+                    obj[port]->addAttribute(attribute::Species, m_species[port]);
                 updateMeta(obj[port]);
                 addObject(m_out[port], obj[port]);
             }

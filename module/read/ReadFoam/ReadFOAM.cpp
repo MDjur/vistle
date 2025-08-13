@@ -44,6 +44,8 @@ namespace mpi = boost::mpi;
 
 using namespace vistle;
 
+static const std::string Invalid = Reader::InvalidChoice;
+
 ReadFOAM::ReadFOAM(const std::string &name, int moduleId, mpi::communicator comm)
 : Reader(name, moduleId, comm), m_boundOut(nullptr)
 {
@@ -74,17 +76,19 @@ ReadFOAM::ReadFOAM(const std::string &name, int moduleId, mpi::communicator comm
         { // Date Choice Parameters
             std::stringstream s;
             s << "Data" << i;
-            auto p = addStringParameter(s.str(), "name of field", "(NONE)", Parameter::Choice);
+            auto p = addStringParameter(s.str(), "name of field", Invalid, Parameter::Choice);
             std::vector<std::string> choices;
-            choices.push_back("(NONE)");
+            choices.push_back(Invalid);
             setParameterChoices(p, choices);
             m_fieldOut.push_back(p);
         }
+
+        linkPortAndParameter(m_volumeDataOut[i], m_fieldOut[i]);
     }
     m_readBoundary = addIntParameter("read_boundary", "load the boundary?", 1, Parameter::Boolean);
     m_boundaryPatchesAsVariants = addIntParameter(
         "patches_as_variants", "create sub-objects with variant attribute for boundary patches", 1, Parameter::Boolean);
-    m_patchSelection = addStringParameter("patches", "select patches", "all");
+    m_patchSelection = addStringParameter("patches", "select patches", "all", Parameter::Restraint);
     for (int i = 0; i < NumBoundaryPorts; ++i) {
         { // 2d Data Ports
             std::stringstream s;
@@ -94,12 +98,13 @@ ReadFOAM::ReadFOAM(const std::string &name, int moduleId, mpi::communicator comm
         { // 2d Data Choice Parameters
             std::stringstream s;
             s << "Data2d" << i;
-            auto p = addStringParameter(s.str(), "name of field", "(NONE)", Parameter::Choice);
+            auto p = addStringParameter(s.str(), "name of field", Invalid, Parameter::Choice);
             std::vector<std::string> choices;
-            choices.push_back("(NONE)");
+            choices.push_back(Invalid);
             setParameterChoices(p, choices);
             m_boundaryOut.push_back(p);
         }
+        linkPortAndParameter(m_boundaryDataOut[i], m_boundaryOut[i]);
     }
     m_buildGhostcellsParam = addIntParameter("build_ghostcells", "whether to build ghost cells", 1, Parameter::Boolean);
     m_buildGhost = m_buildGhostcellsParam->getValue();
@@ -118,7 +123,7 @@ ReadFOAM::~ReadFOAM() //Destructor
 std::vector<std::string> ReadFOAM::getFieldList() const
 {
     std::vector<std::string> choices;
-    choices.push_back("(NONE)");
+    choices.push_back(Invalid);
 
     if (m_case.valid) {
         for (auto &field: m_case.constantFields)
@@ -448,7 +453,7 @@ GridDataContainer ReadFOAM::loadGrid(const std::string &meshdir, std::string top
                 }
             }
 
-            auto types = grid->tl().data();
+            auto tl = grid->tl().data();
             Index num_conn = 0;
             //Check Shape of Cells and fill Type_List
             for (index_t i = 0; i < dim.cells; i++) {
@@ -473,19 +478,19 @@ GridDataContainer ReadFOAM::loadGrid(const std::string &meshdir, std::string top
                 const Index num_faces = cellfaces.size();
                 Index num_verts = 0;
                 if (num_faces == 6 && fourVert == 6 && threeVert == 0 && onlySimpleFaces) {
-                    types[i] = UnstructuredGrid::HEXAHEDRON;
+                    tl[i] = UnstructuredGrid::HEXAHEDRON;
                     num_verts = 8;
                 } else if (num_faces == 5 && fourVert == 3 && threeVert == 2 && onlySimpleFaces) {
-                    types[i] = UnstructuredGrid::PRISM;
+                    tl[i] = UnstructuredGrid::PRISM;
                     num_verts = 6;
                 } else if (num_faces == 5 && fourVert == 1 && threeVert == 4 && onlySimpleFaces) {
-                    types[i] = UnstructuredGrid::PYRAMID;
+                    tl[i] = UnstructuredGrid::PYRAMID;
                     num_verts = 5;
                 } else if (num_faces == 4 && fourVert == 0 && threeVert == 4 && onlySimpleFaces) {
-                    types[i] = UnstructuredGrid::TETRAHEDRON;
+                    tl[i] = UnstructuredGrid::TETRAHEDRON;
                     num_verts = 4;
                 } else {
-                    types[i] = UnstructuredGrid::POLYHEDRON;
+                    tl[i] = UnstructuredGrid::POLYHEDRON;
                     for (Index j = 0; j < cellfaces.size(); ++j) {
                         num_verts += faces[cellfaces[j]].size() + 1;
                     }
@@ -502,7 +507,7 @@ GridDataContainer ReadFOAM::loadGrid(const std::string &meshdir, std::string top
                 el[i] = connectivities.size();
                 //connectivity list
                 const auto &cellfaces = cellfacemap[i]; //get all faces of current cell
-                switch (types[i]) {
+                switch (tl[i]) {
                 case UnstructuredGrid::HEXAHEDRON: {
                     index_t ia = cellfaces[0]; //choose the first face as starting face
                     std::vector<index_t> a = faces[ia];
@@ -611,8 +616,7 @@ GridDataContainer ReadFOAM::loadGrid(const std::string &meshdir, std::string top
                 } break;
 
                 default: {
-                    std::cerr << "cell #" << i << " has invalid type 0x" << std::hex << types[i] << std::dec
-                              << std::endl;
+                    std::cerr << "cell #" << i << " has invalid type 0x" << std::hex << tl[i] << std::dec << std::endl;
                     break;
                 }
                 }
@@ -744,7 +748,7 @@ std::vector<DataBase::ptr> ReadFOAM::loadBoundaryField(const std::string &meshdi
                 x[i] = fullX[dataMapping[idx][i]];
             }
             if (asVariants)
-                s->addAttribute("_variant", patchNames[idx]);
+                s->addAttribute(attribute::Variant, patchNames[idx]);
             updateMeta(s);
             result.push_back(s);
 
@@ -759,7 +763,7 @@ std::vector<DataBase::ptr> ReadFOAM::loadBoundaryField(const std::string &meshdi
                 z[i] = fullZ[dataMapping[idx][i]];
             }
             if (asVariants)
-                v->addAttribute("_variant", patchNames[idx]);
+                v->addAttribute(attribute::Variant, patchNames[idx]);
             updateMeta(v);
             result.push_back(v);
         }
@@ -773,7 +777,7 @@ void ReadFOAM::setMeta(Object::ptr obj, int processor, int timestep) const
         Index skipfactor = timeIncrement();
         obj->setTimestep(timestep);
         obj->setNumTimesteps((m_case.timedirs.size() + skipfactor - 1) / skipfactor);
-        obj->setBlock(processor);
+        obj->setBlock(processor == -1 ? 0 : processor);
         obj->setNumBlocks(m_case.numblocks == 0 ? 1 : m_case.numblocks);
 
         if (timestep >= 0) {
@@ -803,7 +807,7 @@ bool ReadFOAM::loadFields(const std::string &meshdir, const std::map<std::string
         DataBase::ptr obj = loadField(meshdir, field);
         if (obj) {
             setMeta(obj, processor, timestep);
-            obj->addAttribute("_species", field);
+            obj->addAttribute(attribute::Species, field);
         }
         m_currentvolumedata[processor][i] = obj;
     }
@@ -851,7 +855,7 @@ bool ReadFOAM::loadFields(const std::string &meshdir, const std::map<std::string
             assert(obj);
             if (obj) {
                 setMeta(obj, processor, timestep);
-                obj->addAttribute("_species", field);
+                obj->addAttribute(attribute::Species, field);
                 obj->setMapping(DataBase::Element);
                 obj->setGrid(m_currentbound[processor][j]);
                 addObject(m_boundaryDataOut[i], obj);
@@ -1214,6 +1218,7 @@ void ReadFOAM::applyGhostCells(int processor, GhostMode mode)
     auto &x = grid->x();
     auto &y = grid->y();
     auto &z = grid->z();
+    ghost.resize(tl.size(), cell::NORMAL);
     //std::cerr << "applyGhostCells(p=" << processor << ", mode=" << mode << "), #cells=" << el.size() << ", #coords: " << x.size() << std::endl;
 
     for (const auto &b: boundaries.procboundaries) {
@@ -1241,15 +1246,15 @@ void ReadFOAM::applyGhostCells(int processor, GhostMode mode)
         }
 
         if (mode == ALL ||
-            mode == BASE) { //ghost cell topology is unnknown and has to be appended to the current topology
+            mode == BASE) { //ghost cell topology is unknown and has to be appended to the current topology
             for (Index cell = 0; cell < tlIn.size(); ++cell) { //append new topology to old grid
                 Index elementStart = elIn[cell];
                 Index elementEnd = elIn[cell + 1];
                 auto mapIndex = [sharedVerticesMapping, pointsSize](SIndex point) -> SIndex {
                     if (point <
-                        0) { //if point<0 then vertice is already known and can be looked up in sharedVerticesMapping
+                        0) { //if point<0 then vertex is already known and can be looked up in sharedVerticesMapping
                         return sharedVerticesMapping[-point - 1];
-                    } else { //else the vertice is unknown and its coordinates will be appended (in order of first appearance) to the old coord-lists so we point to an index beyond the current size
+                    } else { //else the vertex is unknown and its coordinates will be appended (in order of first appearance) to the old coord-lists so we point to an index beyond the current size
                         return point + pointsSize;
                     }
                 };
@@ -1260,6 +1265,7 @@ void ReadFOAM::applyGhostCells(int processor, GhostMode mode)
                 el.push_back(cl.size());
                 tl.push_back(tlIn[cell]);
                 ghost.push_back(cell::GHOST);
+                assert(tl.size() == ghost.size());
             }
         }
 

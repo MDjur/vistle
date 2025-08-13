@@ -109,7 +109,9 @@ bool VistlePlugin::init()
             executeButton->setPriority(ui::Element::Toolbar);
         }
 
-        update();
+        do {
+            update();
+        } while (m_module->mirrorId() == message::Id::Invalid);
 
         return true;
     }
@@ -186,11 +188,11 @@ bool VistlePlugin::update()
             }
         }
     } catch (boost::interprocess::interprocess_exception &e) {
-        std::cerr << "Module::dispatch: interprocess_exception: " << e.what() << std::endl;
+        std::cerr << "VistlePlugin::update: interprocess_exception: " << e.what() << std::endl;
         std::cerr << "   error: code: " << e.get_error_code() << ", native: " << e.get_native_error() << std::endl;
         throw(e);
     } catch (std::exception &e) {
-        std::cerr << "Module::dispatch: std::exception: " << e.what() << std::endl;
+        std::cerr << "VistlePlugin::update: std::exception: " << e.what() << std::endl;
         throw(e);
     }
 
@@ -229,6 +231,28 @@ bool VistlePlugin::sendVisMessage(const covise::Message *msg)
 {
     if (!m_module) {
         return false;
+    }
+
+#if 0
+    auto tostr = [](int t) -> std::string {
+        std::stringstream str;
+        str << t;
+        if (t < 0 || t >= covise::COVISE_MESSAGE_LAST_DUMMY_MESSAGE) {
+            str << " (invalid)";
+        } else {
+            str << " (" << covise::covise_msg_types_array[t] << ")";
+        }
+        return str.str();
+    };
+
+    std::cerr << "VistlePlugin::sendVisMessage: sender=" << msg->sender << ", send_type=" << msg->send_type
+              << ", type=" << tostr(msg->type) << std::endl;
+#endif
+
+    if (msg->type == covise::Message::UI && msg->data.data() &&
+        strncmp(msg->data.data(), "WANT_TABLETUI", msg->data.length()) == 0) {
+        // no one is listening for this
+        return true;
     }
 
     message::Cover cover(m_module->mirrorId(), msg->sender, msg->send_type, msg->type);

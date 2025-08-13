@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.16 FATAL_ERROR)
 
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED 14)
+set(CMAKE_CXX_STANDARD_REQUIRED 17)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED 99)
+set(CMAKE_C_STANDARD_REQUIRED 11)
 set(CMAKE_C_EXTENSIONS OFF)
 
 project(
@@ -31,6 +31,14 @@ if(POLICY CMP0144)
     # make find_include/find_library search in uppercased <PackageName>_ROOT prefix
     cmake_policy(SET CMP0144 NEW)
 endif()
+if(POLICY CMP0167)
+    # use find_package(Boost) only in CONFIG mode
+    cmake_policy(SET CMP0167 NEW)
+endif()
+if(POLICY CMP0177)
+    # normalize install DESTINATION paths
+    cmake_policy(SET CMP0177 NEW)
+endif()
 
 # vim's YouCompleteMe can make use of this
 set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
@@ -48,7 +56,7 @@ set(VISTLE_CPU_ARCH
     ""
     CACHE STRING "CPU architecture to optimize for (native, corei7-avx, core-avx2, atom, ...)")
 
-option(VISTLE_PEDANTIC_ERRORS "Be pedantic about C++ standard and emit errors" OFF) # for diy, also included in vtk-m
+option(VISTLE_PEDANTIC_ERRORS "Be pedantic about C++ standard and emit errors" OFF) # for diy, also included in Viskores
 
 option(VISTLE_SANITIZE_UNDEFINED "Build with -fsanitize=undefined" OFF)
 option(VISTLE_SANITIZE_ADDRESS "Build with -fsanitize=address" OFF)
@@ -84,12 +92,11 @@ endif()
 
 option(VISTLE_INTERNAL_BOOST_MPI "Use internal copy of Boost.MPI" ON)
 
-# allow for optimizations in Boost.MPI
-if(VISTLE_INTERNAL_BOOST_MPI)
-    if(NOT WIN32)
-        add_definitions(-DBOOST_MPI_HOMOGENEOUS)
-    endif()
-endif()
+# configure process model
+option(VISTLE_MULTI_PROCESS "use multiple processes communicating via shared memory" ON)
+
+option(VISTLE_MODULES_SHARED "use shared libraries for modules" ON)
+option(VISTLE_USE_SHARED_MEMORY "use shared memory even within a process" OFF)
 
 enable_testing()
 
@@ -530,7 +537,7 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     endif()
 
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" AND CMAKE_CXX_COMPILER_VERSION MATCHES "^11")
-        # silence "note: parameter passing for argument of type ‘vtkm::Vec<double, 2>’ when C++17 is enabled changed to match C++14 in GCC 10.1"
+        # silence "note: parameter passing for argument of type ‘viskores::Vec<double, 2>’ when C++17 is enabled changed to match C++14 in GCC 10.1"
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-psabi")
     endif()
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Intel")
@@ -565,7 +572,23 @@ endif()
 if(NOT VISTLE_GUI_ONLY)
     if(VISTLE_USE_MPI)
         set(MPI_SKIP_MPICXX TRUE)
-        vistle_find_package(MPI REQUIRED COMPONENTS C CXX)
+        # at least MPI 3.0 is required for MPI_CXX_BOOL
+        vistle_find_package(MPI 2.0 COMPONENTS C CXX)
+        if(NOT MPI_FOUND)
+            message(WARNING "No suitable MPI implementation found, building without MPI support - also make sure that OpenCOVER is built without MPI")
+            set(VISTLE_USE_MPI FALSE)
+        endif()
+    endif()
+
+    if(NOT VISTLE_USE_MPI)
+        if(NOT VISTLE_INTERNAL_BOOST_MPI)
+            message(WARNING "Not using MPI, thus building internal dummy Boost.MPI")
+            set(VISTLE_INTERNAL_BOOST_MPI TRUE)
+        endif()
+        if(NOT VISTLE_MULTI_PROCESS)
+            message(WARNING "Using dummy MPI implementation that is not thread-safe, thus resorting to multi-process configuration")
+            set(VISTLE_MULTI_PROCESS TRUE)
+        endif()
     endif()
 
     # for CMake config file version of boost this needs to be changed to version numbers such as 1.60.99 instead of 106099
@@ -587,6 +610,24 @@ if(NOT VISTLE_GUI_ONLY)
     else()
         set(BOOST_MPI Boost::mpi)
     endif()
+
+    # allow for optimizations in Boost.MPI
+    if(VISTLE_INTERNAL_BOOST_MPI AND NOT WIN32)
+        add_definitions(-DBOOST_MPI_HOMOGENEOUS)
+    endif()
+
+    if(NOT VISTLE_MULTI_PROCESS)
+        add_definitions(-DMODULE_THREAD)
+
+        if(NOT VISTLE_MODULES_SHARED)
+            add_definitions(-DMODULE_STATIC)
+        endif()
+
+        if(NOT VISTLE_USE_SHARED_MEMORY)
+            add_definitions(-DNO_SHMEM)
+        endif()
+    endif()
+
 endif()
 
 add_definitions(-DBOOST_LIB_DIAGNOSTIC=1)
@@ -759,8 +800,8 @@ macro(vistle_target_link_libraries targetname)
         endif()
     endforeach()
 
-    set(DependencyList Boost vtkm) # Name when linking the package
-    set(DependencyListNames Boost VTKm) # Name when finding the package
+    set(DependencyList Boost viskores) # Name when linking the package
+    set(DependencyListNames Boost Viskores) # Name when finding the package
     set(CurrentDependencyList 0)
 
     foreach(Dependency IN ITEMS ${DependencyList})
@@ -787,6 +828,8 @@ macro(vistle_target_link_libraries targetname)
         prepend_file(${buildPackageLocation}/${targetname}Config.cmake ${file_content})
     endif()
 endmacro()
+
+include(cmake/Documentation.cmake)
 
 macro(vistle_install_docs)
     string(REPLACE ${PROJECT_BINARY_DIR} "" directory ${CMAKE_CURRENT_BINARY_DIR})
@@ -824,24 +867,6 @@ enable_testing()
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
-# configure process model
-option(VISTLE_MULTI_PROCESS "use multiple processes communicating via shared memory" ON)
-
-option(VISTLE_MODULES_SHARED "use shared libraries for modules" ON)
-option(VISTLE_USE_SHARED_MEMORY "use shared memory even within a process" OFF)
-
-if(NOT VISTLE_MULTI_PROCESS)
-    add_definitions(-DMODULE_THREAD)
-
-    if(NOT VISTLE_MODULES_SHARED)
-        add_definitions(-DMODULE_STATIC)
-    endif()
-
-    if(NOT VISTLE_USE_SHARED_MEMORY)
-        add_definitions(-DNO_SHMEM)
-    endif()
-endif()
-
 macro(USE_OPENMP)
     if(VISTLE_USE_OPENMP AND OPENMP_FOUND)
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
@@ -872,23 +897,79 @@ macro(vistle_add_executable targetname)
         BUNDLE DESTINATION bin)
 endmacro(vistle_add_executable)
 
+set(ALL_CATEGORIES
+    ""
+    CACHE INTERNAL "")
+set(ALL_CATEGORIES_ORDERED
+    # the same order as in GUI
+    Read;Simulation;Filter;Map;Geometry;Render;General;Write;Information;UniViz;Develop
+    CACHE INTERNAL "")
 set(ALL_MODULES
     ""
     CACHE INTERNAL "")
+set(CATEGORY_DESCRIPTION_FILE ${PROJECT_BINARY_DIR}/share/vistle/categorydescriptions.txt)
 set(MODULE_DESCRIPTION_FILE ${PROJECT_BINARY_DIR}/share/vistle/moduledescriptions.txt)
 
 if(NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Emscripten")
     file(REMOVE ${MODULE_DESCRIPTION_FILE})
-    install(FILES ${MODULE_DESCRIPTION_FILE} DESTINATION ${CMAKE_INSTALL_PREFIX}/share/vistle/)
+    install(FILES ${CATEGORY_DESCRIPTION_FILE} ${MODULE_DESCRIPTION_FILE} DESTINATION ${CMAKE_INSTALL_PREFIX}/share/vistle/)
+
+    macro(vistle_category name description)
+        set(VISTLE_MODULE_CATEGORY ${name})
+
+        set(VISTLE_CATEGORY_${name}_DESCRIPTION
+            ${description}
+            CACHE INTERNAL "")
+        cmake_path(GET CMAKE_CURRENT_LIST_DIR FILENAME dir)
+        string(TOLOWER ${dir} lower)
+        string(TOLOWER ${name} lower)
+        set(VISTLE_CATEGORY_${name}_FILE
+            ${CMAKE_CURRENT_LIST_DIR}/${lower}.md
+            CACHE INTERNAL "")
+
+        set(listname VISTLE_CATEGORY_${VISTLE_MODULE_CATEGORY}_MODULES)
+        list(FIND ALL_CATEGORIES ${name} idx)
+        if(idx EQUAL -1)
+            # remove modules from previous CMake runs from category
+            set(${listname}
+                ""
+                CACHE INTERNAL "")
+        endif()
+
+        list(FIND ALL_CATEGORIES_ORDERED ${name} idx)
+        if(idx EQUAL -1)
+            set(ALL_CATEGORIES_ORDERED
+                ${ALL_CATEGORIES_ORDERED} ${name}
+                CACHE INTERNAL "")
+        endif()
+        set(ALL_CATEGORIES
+            ${ALL_CATEGORIES} ${name}
+            CACHE INTERNAL "")
+    endmacro(vistle_category)
+
+    macro(write_category_descriptions DESCS)
+        file(REMOVE ${DESCS})
+        foreach(name IN LISTS ALL_CATEGORIES_ORDERED)
+            set(description ${VISTLE_CATEGORY_${name}_DESCRIPTION})
+            file(APPEND ${DESCS} "${name} ${description}\n")
+        endforeach()
+    endmacro()
 
     macro(add_module2 targetname executable description)
         if(NOT VISTLE_MODULE_CATEGORY)
             set(VISTLE_MODULE_CATEGORY "Unspecified")
         endif()
-
+        set(VISTLE_MODULE_${targetname}_CATEGORY
+            "${VISTLE_MODULE_CATEGORY}"
+            CACHE INTERNAL "")
+        set(listname VISTLE_CATEGORY_${VISTLE_MODULE_CATEGORY}_MODULES)
+        list(APPEND VISTLE_CATEGORY_${VISTLE_MODULE_CATEGORY}_MODULES ${targetname})
+        set(${listname}
+            ${${listname}}
+            CACHE INTERNAL "")
         file(APPEND ${MODULE_DESCRIPTION_FILE} "${targetname} ${VISTLE_MODULE_CATEGORY} ${description}\n")
-        set(ALL_MODULES
-            ${ALL_MODULES} ${targetname}
+        set(VISTLE_MODULE_${targetname}_DESCRIPTION
+            ${description}
             CACHE INTERNAL "")
 
         if(${executable})
@@ -897,12 +978,6 @@ if(NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Emscripten")
             install(TARGETS ${targetname} RUNTIME DESTINATION libexec/module)
         else()
             if(VISTLE_MODULES_SHARED)
-                if(Boost_VERSION VERSION_GREATER 1.69.99)
-
-                elseif(Boost_VERSION VERSION_LESS 106400)
-                    message(FATAL_ERROR "At least Boost 1.64 is required for Boost.DLL")
-                endif()
-
                 add_library(${targetname} MODULE ${ARGN})
                 set_target_properties(${targetname} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib/module)
                 set_target_properties(${targetname} PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib/module)
@@ -934,6 +1009,11 @@ if(NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Emscripten")
         else()
             add_module2(${targetname} FALSE ${description} ${ARGN})
         endif()
+
+        set(ALL_MODULES
+            ${ALL_MODULES} ${targetname}
+            CACHE INTERNAL "")
+        add_module_doc_target(${targetname} ${VISTLE_MODULE_CATEGORY})
     endmacro(add_module)
 
     macro(add_vtkm_module targetname description)
@@ -943,9 +1023,9 @@ if(NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Emscripten")
         add_module(${targetname} ${description} ${SOURCES})
         if(IDX GREATER_EQUAL 0)
             list(SUBLIST SOURCES ${IDX} -1 DEVSOURCES)
-            vtkm_add_target_information(${targetname} MODIFY_CUDA_FLAGS DEVICE_SOURCES ${DEVSOURCES})
+            viskores_add_target_information(${targetname} MODIFY_CUDA_FLAGS DEVICE_SOURCES ${DEVSOURCES})
         endif()
-        target_link_libraries(${targetname} vistle_vtkm vtkm::cont vtkm::filter)
+        target_link_libraries(${targetname} vistle_viskores viskores::cont viskores::filter)
         if(VISTLE_USE_CUDA AND VISTLE_USE_SEPARABLE_COMPILATION)
             set_target_properties(${targetname} PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
         endif()
@@ -1016,9 +1096,6 @@ endif()
 
 set(ENABLE_INSTALLER TRUE)
 
-# vistle_find_package(Thrust REQUIRED)
-set(THRUST_INCLUDE_DIR "${PROJECT_SOURCE_DIR}/lib/3rdparty/thrust")
-
 # new submodule for block distribution
 set(DIY_INCLUDE_DIR "${PROJECT_SOURCE_DIR}/lib/3rdparty/diy/include")
 
@@ -1047,10 +1124,6 @@ if(VISTLE_INTERNAL_ZFP)
     if(OPENMP_FOUND)
         set(ZFP_LIBRARIES ${ZFP_LIBRARIES} ${OpenMP_CXX_LIBRARIES})
     endif()
-
-    set(ZFP_FOUND TRUE)
-    #add_definitions(-DHAVE_ZFP)
-    #include_directories(SYSTEM "${ZFP_INCLUDE_DIRS}")
 else()
     vistle_find_package(ZFP REQUIRED)
 endif()
@@ -1071,6 +1144,9 @@ else()
     set(SZ3_FOUND TRUE)
     set(USE_SZ3 TRUE)
 endif()
+
+set(BIGWHOOP_INCLUDE_DIRS
+    "${PROJECT_SOURCE_DIR}/lib/3rdparty/BigWhoop/include/library/private;${PROJECT_SOURCE_DIR}/lib/3rdparty/BigWhoop/include/library/public")
 
 set(OpenGL_GL_PREFERENCE LEGACY)
 vistle_find_package(OpenGL)
@@ -1110,27 +1186,27 @@ vistle_find_package(
 option(VISTLE_64BIT_INDICES "use 64-bit integers for array indices" OFF)
 option(VISTLE_DOUBLE_PRECISION "use double instead of float for coordinates and data arrays" OFF)
 
-option(VISTLE_INTERNAL_VTKM "Use internal copy of VTK-m" ON)
+option(VISTLE_INTERNAL_VISKORES "Use internal copy of Viskores" ON)
 
-if(VTK_FOUND AND VTK_HAS_VTKm)
-    message("Using VTK-m provided by VTK ${VTK_VERSION}")
+if(VTK_FOUND AND VTK_HAS_Viskores)
+    message("Using Viskores provided by VTK ${VTK_VERSION}")
 
-    if(VISTLE_INTERNAL_VTKM)
-        message(WARNING "Provided VTK already contains VTK-m, cannot build internal copy of VTK-m. Disabling VISTLE_INTERNAL_VTKM...")
-        set(VISTLE_INTERNAL_VTKM OFF)
+    if(VISTLE_INTERNAL_VISKORES)
+        message(WARNING "Provided VTK already contains Viskores, cannot build internal copy of Viskores. Disabling VISTLE_INTERNAL_VISKORES...")
+        set(VISTLE_INTERNAL_VISKORES OFF)
     endif()
 endif()
 
-if(NOT VISTLE_INTERNAL_VTKM)
+if(NOT VISTLE_INTERNAL_VISKORES)
     # search without version argument, as it is not possible to search for all compatible versions (2.0 & 2.1) in one go
-    vistle_find_package(VTKm REQUIRED)
+    vistle_find_package(Viskores REQUIRED)
 
-    if(NOT ("${VTKm_VERSION_MAJOR}" EQUAL 2))
-        message(FATAL_ERROR "Vtk-m version must be >= 2.0 and < 3.0 (but is ${VTKm_VERSION}).")
+    if(NOT ("${Viskores_VERSION_MAJOR}" EQUAL 1))
+        message(FATAL_ERROR "Viskores version must be >= 1.0 and < 2.0 (but is ${Viskores_VERSION}).")
     endif()
 
-    # make sure vtk-m and vistle data types are compatible (if not, overwrite user flags, accordingly)
-    add_subdirectory(module/test/IsoSurfaceVtkm/compatibility)
+    # make sure viskores and vistle data types are compatible (if not, overwrite user flags, accordingly)
+    add_subdirectory(cmake/Modules/viskores)
 endif()
 
 # configure data-type sizes
@@ -1151,6 +1227,9 @@ add_subdirectory(module)
 add_subdirectory(app) # has to come after module subdirectory for static module registration
 add_subdirectory(test)
 add_subdirectory(bin)
+
+write_category_descriptions(${CATEGORY_DESCRIPTION_FILE})
+configure_documentation()
 
 include(FeatureSummary)
 feature_summary(WHAT ALL)

@@ -1,5 +1,4 @@
-# general modules can operate at any stage in the pipeline
-set(VISTLE_MODULE_CATEGORY "General")
+vistle_category("General" "manipulate data at any pipeline stage")
 
 add_subdirectory(AddAttribute)
 add_subdirectory(Assemble)
@@ -8,6 +7,7 @@ add_subdirectory(AttachNormals)
 add_subdirectory(AttachShader)
 add_subdirectory(Cache)
 add_subdirectory(Calc)
+add_subdirectory(ClipVtkm)
 add_subdirectory(ColorAttribute)
 add_subdirectory(Distribute)
 add_subdirectory(EnableTransparency)

@@ -58,6 +58,15 @@ StateTracker::StateTracker(int id, const std::string &name, std::shared_ptr<Port
     Module config(Id::Config, Id::MasterHub); // for settings tied to currently loaded workflow
     config.name = "Workflow Configuration";
     runningMap.emplace(Id::Config, config);
+
+    m_numMessagesByType.resize(message::NumMessageTypes + 1, 0);
+}
+
+void StateTracker::cancel()
+{
+    m_cancelling = true;
+    m_replyCondition.notify_all();
+    m_slaveCondition.notify_all();
 }
 
 void StateTracker::setVerbose(bool verbose)
@@ -246,6 +255,18 @@ std::string StateTracker::getModuleName(int id) const
     return std::string();
 }
 
+std::string StateTracker::getModuleDisplayName(int id) const
+{
+    mutex_locker guard(m_stateMutex);
+    RunningMap::const_iterator it = runningMap.find(id);
+    if (it != runningMap.end())
+        return it->second.displayName;
+    it = quitMap.find(id);
+    if (it != quitMap.end())
+        return it->second.displayName;
+    return std::string();
+}
+
 std::string StateTracker::getModuleDescription(int id) const
 {
     AvailableModule::Key key{getHub(id), getModuleName(id)};
@@ -290,22 +311,29 @@ int StateTracker::getMirrorId(int id) const
     return it->second.mirrorOfId;
 }
 
-const std::set<int> &StateTracker::getMirrors(int id) const
+std::set<int> StateTracker::getMirrors(int id) const
 {
-    static std::set<int> empty;
+    std::set<int> mirrors;
     mutex_locker guard(m_stateMutex);
     RunningMap::const_iterator it = runningMap.find(id);
     if (it == runningMap.end())
-        return empty;
+        return mirrors;
+
     int mid = it->second.mirrorOfId;
     if (mid == message::Id::Invalid) {
-        return it->second.mirrors;
+        return mirrors;
     }
-    RunningMap::const_iterator mit = runningMap.find(mid);
-    if (mit == runningMap.end())
-        return empty;
 
-    return mit->second.mirrors;
+    RunningMap::const_iterator mit = runningMap.find(mid);
+    if (mit != runningMap.end())
+        return mit->second.mirrors;
+
+    for (const auto &mod: runningMap) {
+        if (mod.second.mirrorOfId == mid) {
+            mirrors.insert(mod.first);
+        }
+    }
+    return mirrors;
 }
 
 namespace {
@@ -326,6 +354,11 @@ void StateTracker::appendModuleState(VistleState &state, const StateTracker::Mod
     spawn.setMirroringId(m.mirrorOfId);
     //CERR << "id " << id << " mirrors " << m.mirrorOfId << std::endl;
     appendMessage(state, spawn);
+
+    if (!m.displayName.empty()) {
+        SetName setname(m.id, m.displayName);
+        appendMessage(state, setname);
+    }
 
     if (m.initialized) {
         Started s(m.name);
@@ -415,6 +448,39 @@ void StateTracker::appendModulePorts(VistleState &state, const Module &mod) cons
     }
 }
 
+void StateTracker::appendModuleInfo(VistleState &state, const Module &mod) const
+{
+    for (const auto &it: mod.currentItemInfo) {
+        using namespace vistle::message;
+        const auto &key = it.first;
+        const auto &value = it.second;
+        if (value.empty())
+            continue;
+
+        ItemInfo info(key.type, key.port);
+        info.setSenderId(mod.id);
+        ItemInfo::Payload pl(value);
+        auto vec = addPayload(info, pl);
+        auto shvec = std::make_shared<buffer>(vec);
+        appendMessage(state, info, shvec);
+    }
+
+    for (const auto &it: mod.currentPortState) {
+        using namespace vistle::message;
+        const auto &key = it.first;
+        const auto &value = it.second;
+        if (value == message::ItemInfo::PortState::Enabled)
+            continue;
+
+        ItemInfo info(key.port, message::ItemInfo::PortState(value));
+        info.setSenderId(mod.id);
+        ItemInfo::Payload pl("");
+        auto vec = addPayload(info, pl);
+        auto shvec = std::make_shared<buffer>(vec);
+        appendMessage(state, info, shvec);
+    }
+}
+
 void StateTracker::appendModuleOutputConnections(VistleState &state, const Module &mod) const
 {
     using namespace vistle::message;
@@ -495,6 +561,7 @@ StateTracker::VistleState StateTracker::getState() const
         }
         appendModuleParameter(state, m);
         appendModulePorts(state, m);
+        appendModuleInfo(state, m);
     }
 
     // connections
@@ -509,6 +576,15 @@ StateTracker::VistleState StateTracker::getState() const
     appendMessage(state, ReplayFinished());
 
     return state;
+}
+
+StateTracker::VistleLockedState StateTracker::getLockedState() const
+{
+    mutex_locker guard(m_stateMutex);
+    auto state = getState();
+    VistleLockedState lockedState(m_stateMutex);
+    lockedState.messages = std::move(state);
+    return lockedState;
 }
 
 void StateTracker::printModules(bool withConnections) const
@@ -578,6 +654,10 @@ bool StateTracker::handle(const message::Message &msg, const char *payload, size
 
     ++m_numMessages;
     m_aggregatedPayload += msg.payloadSize();
+    {
+        auto t = std::min(message::NumMessageTypes, msg.type());
+        ++m_numMessagesByType[t];
+    }
 
 #ifndef NDEBUG
     switch (msg.type()) {
@@ -670,6 +750,11 @@ bool StateTracker::handle(const message::Message &msg, const char *payload, size
     case DEBUG: {
         const auto &debug = msg.as<Debug>();
         handled = handlePriv(debug);
+        break;
+    }
+    case SETNAME: {
+        const auto &setname = msg.as<SetName>();
+        handled = handlePriv(setname);
         break;
     }
     case QUIT: {
@@ -1031,6 +1116,26 @@ bool StateTracker::handlePriv(const message::LoadWorkflow &load)
 
 bool StateTracker::handlePriv(const message::SaveWorkflow &save)
 {
+    return true;
+}
+
+bool StateTracker::handlePriv(const message::SetName &setname)
+{
+    mutex_locker guard(m_stateMutex);
+    auto it = runningMap.find(setname.module());
+    if (it == runningMap.end()) {
+        CERR << "module " << setname.module() << " not found" << std::endl;
+        return false;
+    }
+
+    auto &mod = it->second;
+    mod.displayName = setname.name();
+
+    for (StateObserver *o: m_observers) {
+        o->setName(mod.id, mod.displayName);
+    }
+    setModified("setname " + std::to_string(mod.id));
+
     return true;
 }
 
@@ -1591,8 +1696,41 @@ bool StateTracker::handlePriv(const message::ItemInfo &info, const buffer &paylo
 {
     auto pl = message::getPayload<message::ItemInfo::Payload>(payload);
     mutex_locker guard(m_stateMutex);
+
+    auto it = runningMap.find(info.senderId());
+    if (it == runningMap.end())
+        return false;
+    auto &mod = it->second;
+    Module::InfoKey key(info.port(), info.infoType());
+    switch (info.infoType()) {
+    case message::ItemInfo::PortEnableState:
+        mod.currentPortState[key] = info.portEnableState();
+        break;
+    default:
+        mod.currentItemInfo[key] = pl.text;
+        break;
+    }
+
+
     for (StateObserver *o: m_observers) {
-        o->itemInfo(pl.text, info.infoType(), info.senderId(), info.port());
+        switch (info.infoType()) {
+        case message::ItemInfo::PortEnableState:
+            o->portState(info.portEnableState(), info.senderId(), info.port());
+            break;
+        default:
+            o->itemInfo(pl.text, info.infoType(), info.senderId(), info.port());
+            break;
+        }
+    }
+    for (StateObserver *o: m_observers) {
+        switch (info.infoType()) {
+        case message::ItemInfo::PortEnableState:
+            o->portState(info.portEnableState(), info.senderId(), info.port());
+            break;
+        default:
+            o->itemInfo(pl.text, info.infoType(), info.senderId(), info.port());
+            break;
+        }
     }
 
     return true;
@@ -1739,9 +1877,7 @@ bool StateTracker::handlePriv(const message::CloseConnection &close)
 
 StateTracker::~StateTracker()
 {
-    if (m_portTracker) {
-        m_portTracker->setTracker(nullptr);
-    }
+    m_portTracker.reset();
 }
 
 std::shared_ptr<PortTracker> StateTracker::portTracker() const
@@ -1812,6 +1948,8 @@ std::shared_ptr<message::Buffer> StateTracker::waitForReply(const message::uuid_
     std::shared_ptr<message::Buffer> ret = removeRequest(uuid);
     while (!ret && !m_quitting) {
         m_replyCondition.wait(locker);
+        if (m_cancelling)
+            break;
         ret = removeRequest(uuid);
     }
     return ret;
@@ -1858,6 +1996,8 @@ std::vector<int> StateTracker::waitForSlaveHubs(size_t count)
     auto hubIds = getSlaveHubs();
     while (hubIds.size() < count) {
         m_slaveCondition.wait(locker);
+        if (m_cancelling)
+            break;
         hubIds = getSlaveHubs();
     }
     return hubIds;
@@ -1910,19 +2050,22 @@ void StateTracker::unregisterObserver(StateObserver *observer) const
     m_observers.erase(observer);
 }
 
-ParameterSet StateTracker::getConnectedParameters(const Parameter &param) const
+ParameterSet StateTracker::getConnectedParameters(const Parameter &param, bool onlyDirect) const
 {
     mutex_locker guard(m_stateMutex);
 
     std::function<ParameterSet(const Port *, ParameterSet)> findAllConnectedPorts;
-    findAllConnectedPorts = [this, &findAllConnectedPorts](const Port *port, ParameterSet conn) -> ParameterSet {
+    findAllConnectedPorts = [this, &findAllConnectedPorts, onlyDirect](const Port *port,
+                                                                       ParameterSet conn) -> ParameterSet {
         if (const Port::ConstPortSet *list = portTracker()->getConnectionList(port)) {
             for (auto port: *list) {
                 auto param = getParameter(port->getModuleID(), port->getName());
                 if (param && conn.find(param) == conn.end()) {
                     conn.insert(param);
-                    const Port *port = portTracker()->getPort(param->module(), param->getName());
-                    conn = findAllConnectedPorts(port, conn);
+                    if (!onlyDirect) {
+                        const Port *port = portTracker()->getPort(param->module(), param->getName());
+                        conn = findAllConnectedPorts(port, conn);
+                    }
                 }
             }
         }
@@ -1937,6 +2080,11 @@ ParameterSet StateTracker::getConnectedParameters(const Parameter &param) const
     if (port->getType() != Port::PARAMETER)
         return ParameterSet();
     return findAllConnectedPorts(port, ParameterSet());
+}
+
+ParameterSet StateTracker::getDirectlyConnectedParameters(const Parameter &param) const
+{
+    return getConnectedParameters(param, true);
 }
 
 void StateTracker::computeHeights()
@@ -2234,6 +2382,8 @@ void StateObserver::info(const std::string &text, message::SendText::TextType te
 void StateObserver::itemInfo(const std::string &text, message::ItemInfo::InfoType type, int senderId,
                              const std::string &port)
 {}
+void StateObserver::portState(vistle::message::ItemInfo::PortState state, int senderId, const std::string &port)
+{}
 void StateObserver::status(int id, const std::string &text, message::UpdateStatus::Importance importance)
 {}
 void StateObserver::updateStatus(int id, const std::string &text, message::UpdateStatus::Importance importance)
@@ -2267,6 +2417,12 @@ void StateObserver::message(const vistle::message::Message &msg, vistle::buffer 
 {
     (void)msg;
     (void)payload;
+}
+
+void StateObserver::setName(int id, const std::string &name)
+{
+    (void)id;
+    (void)name;
 }
 
 } // namespace vistle

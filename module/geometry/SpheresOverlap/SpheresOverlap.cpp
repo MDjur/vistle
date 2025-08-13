@@ -63,17 +63,15 @@ bool SpheresOverlap::compute(const std::shared_ptr<BlockTask> &task) const
     Vec<Scalar, 1>::ptr lineThicknesses;
 
     if (m_useVtkm->getValue()) {
-        // create vtk-m dataset from vistle data
-        vtkm::cont::DataSet vtkmSpheres;
+        // create Viskores dataset from vistle data
+        viskores::cont::DataSet vtkmSpheres;
         auto status = vtkmSetGrid(vtkmSpheres, spheres);
-        if (status == VtkmTransformStatus::UNSUPPORTED_GRID_TYPE) {
-            sendError("Currently only supporting unstructured grids");
-            return true;
-        } else if (status == VtkmTransformStatus::UNSUPPORTED_CELL_TYPE) {
-            sendError("Can only transform these cells from vistle to vtkm: point, bar, triangle, polygon, quad, tetra, "
-                      "hexahedron, pyramid");
+
+        if (!status->continueExecution()) {
+            sendText(status->messageType(), status->message());
             return true;
         }
+
 
         vtkmSpheres.AddPointField("radius", radii.handle());
 
@@ -105,10 +103,10 @@ bool SpheresOverlap::compute(const std::shared_ptr<BlockTask> &task) const
     }
 
     if (lines->getNumCoords()) {
+        lines->copyAttributes(geo);
         if (mappedData) {
             lines->copyAttributes(mappedData);
-        } else {
-            lines->copyAttributes(geo);
+            lines->setTransform(geo->getTransform());
         }
 
         updateMeta(lines);
@@ -117,7 +115,7 @@ bool SpheresOverlap::compute(const std::shared_ptr<BlockTask> &task) const
         lineThicknesses->copyAttributes(lines);
         lineThicknesses->setMapping(DataBase::Element);
         lineThicknesses->setGrid(lines);
-        lineThicknesses->addAttribute("_species", "line thickness");
+        lineThicknesses->addAttribute(attribute::Species, "line thickness");
         updateMeta(lineThicknesses);
         task->addObject(m_dataOut, lineThicknesses);
     }

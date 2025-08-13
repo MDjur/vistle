@@ -21,12 +21,6 @@ struct V_COREEXPORT ArrayLoader {
         virtual ~ArrayOwner() {}
     };
 
-    template<typename T>
-    struct Unreffer: public ArrayOwner {
-        explicit Unreffer(ShmVector<T> &ref): m_ref(ref) {}
-        ShmVector<T> m_ref;
-    };
-
     ArrayLoader(const std::string &name, int type, const vistle::iarchive &ar);
     ArrayLoader() = delete;
     ArrayLoader(const ArrayLoader &other) = delete;
@@ -34,39 +28,7 @@ struct V_COREEXPORT ArrayLoader {
     std::shared_ptr<ArrayOwner> m_unreffer;
 
     template<typename T>
-    void operator()(T)
-    {
-        if (shm_array<T, typename shm<T>::allocator>::typeId() == m_type) {
-            if (m_ok) {
-                m_ok = false;
-                std::cerr << "ArrayLoader: multiple type matches for data array " << m_name << std::endl;
-                return;
-            }
-            ShmVector<T> arr;
-            if (!m_name.empty())
-                arr = Shm::the().getArrayFromName<T>(m_name);
-            if (arr) {
-                std::cerr << "ArrayLoader: already have data array with name " << m_name << std::endl;
-                m_unreffer.reset(new Unreffer<T>(arr));
-                return;
-            }
-            auto &ar = const_cast<vistle::iarchive &>(m_ar);
-            std::string arname;
-            ar &arname;
-            assert(arname == m_arname);
-            m_name = ar.translateArrayName(arname);
-            arr = ShmVector<T>((shm_name_t)m_name);
-            if (!arr.valid())
-                arr.construct();
-            //std::cerr << "ArrayLoader: loading " << arname << " as " << m_name << ": arr=" << arr << std::endl;
-            m_name = arr.name().str();
-            ar.registerArrayNameTranslation(arname, arr.name());
-            //std::cerr << "ArrayLoader: constructed " << arname << " as " << arr.name() << std::endl;
-            ar &*arr;
-            m_unreffer.reset(new Unreffer<T>(arr));
-            m_ok = true;
-        }
-    }
+    void operator()(T);
 
     bool load();
     const std::string &name() const;
@@ -91,7 +53,8 @@ public:
                        const std::map<std::string, message::CompressionMode> &compressions,
                        const std::map<std::string, size_t> &sizes);
 
-    void requestArray(const std::string &name, int type, const ArrayCompletionHandler &completeCallback) override;
+    void requestArray(const std::string &name, int localType, int remoteType,
+                      const ArrayCompletionHandler &completeCallback) override;
     void requestObject(const std::string &name, const ObjectCompletionHandler &completeCallback) override;
 
     bool renameObjects() const override;

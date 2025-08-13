@@ -4,10 +4,10 @@
 #include <memory>
 #include <atomic>
 #include <boost/asio/ip/tcp.hpp>
-#include <boost/process.hpp>
 #include <boost/program_options.hpp>
 #include <vistle/core/statetracker.h>
 #include <vistle/util/buffer.h>
+#include <vistle/util/process.h>
 #include "uimanager.h"
 #include <vistle/net/tunnel.h>
 #include <vistle/net/dataproxy.h>
@@ -75,15 +75,14 @@ public:
     bool isPrincipal() const;
     unsigned short port() const;
     unsigned short dataPort() const;
-    std::shared_ptr<boost::process::child>
-    launchProcess(int type, const std::string &prog, const std::vector<std::string> &argv,
-                  std::string name = std::string(),
-                  std::function<bool(std::shared_ptr<boost::process::child>, std::shared_ptr<boost::process::ipstream>)>
-                      parseOutput = nullptr);
-    std::shared_ptr<boost::process::child> launchMpiProcess(int type, const std::vector<std::string> &argv);
+    std::shared_ptr<process::child> launchProcess(
+        int type, const std::string &prog, const std::vector<std::string> &argv, std::string name = std::string(),
+        std::function<bool(std::shared_ptr<process::child>, std::shared_ptr<process::ipstream>)> parseOutput = nullptr);
+    std::shared_ptr<process::child> launchMpiProcess(int type, const std::vector<std::string> &argv);
     const std::string &name() const;
 
-    bool handleMessage(const message::Message &msg, socket_ptr sock = socket_ptr(), const buffer *payload = nullptr);
+    bool handleMessage(const message::Message &msg, socket_ptr sock = socket_ptr(), const buffer *payload = nullptr,
+                       message::Identify::Identity senderType = message::Identify::UNKNOWN);
     bool sendManager(const message::Message &msg, int hub = message::Id::LocalHub, const buffer *payload = nullptr);
     bool sendMaster(const message::Message &msg, const buffer *payload = nullptr);
     bool sendSlaves(const message::Message &msg, bool returnToSender = false, const buffer *payload = nullptr);
@@ -103,17 +102,19 @@ public:
     enum Verbosity {
         Quiet,
         Normal,
-        Modules,
         Manager,
+        Modules,
         DuplicateMessages,
-        Messages,
         ManagerMessages,
+        Messages,
         AllMessages,
     };
     Verbosity verbosity() const;
 
 private:
     struct Slave;
+
+    StateTracker m_stateTracker;
     std::unique_ptr<config::Access> m_config;
 
     message::MessageFactory make;
@@ -148,11 +149,13 @@ private:
     bool cacheModuleValues(int oldModuleId, int newModuleId);
     bool editDelayedConnects(int oldModuleId, int newModuleId);
     void applyAllDelayedParameters(int oldModuleId, int newModuleId);
-    bool copyModuleParams(int oldModuleId, int newModuleId);
-    void cacheParameters(int oldModuleId, int newModuleId);
+    bool copyModuleParams(int oldModuleId, int newModuleId, bool clone = false);
+    void cacheParameters(int oldModuleId, int newModuleId, bool clone = false);
+    void restoreModulePosition(int oldModuleId, int newModuleId, bool clone = false);
     bool linkModuleParams(int oldModuleId, int newModuleId);
 
     bool handlePlainSpawn(message::Spawn &notify, bool doSpawn, bool error);
+    bool notifySpawnError(message::Spawn &notify);
 
     void killOldModule(int migratedId);
     void sendInfo(const std::string &s, int senderId = message::Id::Invalid);
@@ -163,6 +166,7 @@ private:
     bool m_proxyOnly = false;
     vistle::message::AddHub addHubForSelf() const;
 
+    double m_gridSpacingX, m_gridSpacingY;
     static const int DefaultPort = 31093;
     unsigned short m_basePort = DefaultPort;
     unsigned short m_port = 0, m_dataPort = 0, m_masterPort = m_basePort;
@@ -186,7 +190,7 @@ private:
     VrbMode m_vrbMode = VrbMode::VrbTui;
     unsigned short m_vrbPort = 0;
     std::map<int, socket_ptr> m_vrbSockets;
-    std::shared_ptr<boost::process::child> m_vrb;
+    std::shared_ptr<process::child> m_vrb;
     std::chrono::steady_clock::time_point m_lastVrbStart;
     int m_vrbStartWait = 1;
 
@@ -198,10 +202,10 @@ private:
         void setOutputStreaming(bool enable);
         bool isOutputStreaming() const;
 
-        std::shared_ptr<boost::process::child> child;
+        std::shared_ptr<process::child> child;
         Hub *hub = nullptr;
         std::string name;
-        boost::process::pid_t childId = 0;
+        process::pid_t childId = 0;
         int moduleId = message::Id::Invalid;
         mutable std::mutex mutex; // protect access to variables below
         size_t numDiscarded = 0;
@@ -215,11 +219,10 @@ private:
         std::deque<TaggedLine> buffer;
         std::unique_ptr<std::thread> outThread, errThread;
     };
-    std::map<boost::process::pid_t, ObservedChild> m_observedChildren;
+    std::map<process::pid_t, ObservedChild> m_observedChildren;
 
     std::shared_ptr<DataProxy> m_dataProxy;
     TunnelManager m_tunnelManager;
-    StateTracker m_stateTracker;
     UiManager m_uiManager;
     bool m_hasUi = false;
     bool m_hasVrb = false;
@@ -227,7 +230,7 @@ private:
     int m_messageBacklog = 10000;
 
     std::mutex m_processMutex; // protect access to m_processMap
-    typedef std::map<std::shared_ptr<boost::process::child>, int> ProcessMap;
+    typedef std::map<std::shared_ptr<process::child>, int> ProcessMap;
     ProcessMap m_processMap;
     bool m_managerConnected;
 
@@ -290,6 +293,7 @@ private:
     bool handlePriv(const message::ModuleExit &exit);
     bool handlePriv(const message::Kill &kill);
     bool handlePriv(const message::Spawn &spawn);
+    bool handlePriv(const message::SetName &setname);
     bool handlePriv(const message::LoadWorkflow &load);
     bool handlePriv(const message::SaveWorkflow &save);
 

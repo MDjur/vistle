@@ -17,6 +17,7 @@
 #include <vistle/core/messages.h>
 #include <vistle/core/object.h>
 #include <vistle/core/placeholder.h>
+#include <vistle/core/statetracker.h>
 #include <vistle/util/threadname.h>
 
 #include <osg/Node>
@@ -306,6 +307,8 @@ bool COVER::parameterAdded(const int senderId, const std::string &name, const me
 
         m_interactorMap[senderId] = new VistleInteractor(this, moduleName, senderId);
         m_interactorMap[senderId]->setPluginName(plugin);
+        auto dn = this->state().getModuleDisplayName(senderId);
+        m_interactorMap[senderId]->setDisplayName(dn);
         it = m_interactorMap.find(senderId);
         std::cerr << "created interactor for " << moduleName << ":" << senderId << std::endl;
         auto inter = it->second;
@@ -436,9 +439,21 @@ void COVER::removeObject(std::shared_ptr<vistle::RenderObject> vro)
         return;
     }
 
+    osg::ref_ptr<osg::Node> node = ro->node();
+    double retainSeconds = 0.;
+    if (auto retainSecondsAttr = ro->getAttribute(attribute::ModelRetainSeconds)) {
+        retainSeconds = std::stod(retainSecondsAttr);
+    }
+
     auto it = m_fileAttachmentMap.find(ro->getName());
     if (it != m_fileAttachmentMap.end()) {
-        coVRFileManager::instance()->unloadFile(it->second.c_str());
+        std::string filename = it->second;
+        if (retainSeconds <= 0. || !ro) {
+            coVRFileManager::instance()->unloadFile(filename.c_str());
+        } else {
+            auto unloadTime = cover->frameTime() + retainSeconds;
+            m_delayedFileUnloadMap[unloadTime].push_back(filename);
+        }
         m_fileAttachmentMap.erase(it);
     }
 
@@ -449,7 +464,6 @@ void COVER::removeObject(std::shared_ptr<vistle::RenderObject> vro)
         return;
     }
 
-    osg::ref_ptr<osg::Node> node = ro->node();
     if (node) {
         coVRPluginList::instance()->removeNode(node, false, node);
         Creator &cr = getCreator(pro->container->getCreator());
@@ -535,7 +549,7 @@ std::shared_ptr<vistle::RenderObject> COVER::addObject(int senderId, const std::
     for (const auto &obj: {container, geometry, normals, texture}) {
         if (!obj)
             continue;
-        std::string plugin = obj->getAttribute("_plugin");
+        std::string plugin = obj->getAttribute(attribute::Plugin);
         if (!plugin.empty())
             cover->addPlugin(plugin.c_str());
     }
@@ -583,7 +597,7 @@ std::shared_ptr<vistle::RenderObject> COVER::addObject(int senderId, const std::
     if (geometry) {
         transform = makeTransform(geometry);
 
-        const char *filename = pro->coverRenderObject->getAttribute("_model_file");
+        const char *filename = pro->coverRenderObject->getAttribute(attribute::ModelFile);
         if (filename) {
             osg::Node *filenode = nullptr;
             if (!pro->coverRenderObject->isPlaceHolder()) {
@@ -630,67 +644,82 @@ bool COVER::render()
 {
     updateStatus();
 
-    if (m_delayedObjects.empty())
-        return false;
+    bool didWork = false;
 
-    int numReady = 0;
-    for (size_t i = 0; i < m_delayedObjects.size(); ++i) {
-        auto &node_future = m_delayedObjects[i].node_future;
-        if (!node_future.valid()) {
-            std::cerr << "COVER::render(): future not valid" << std::endl;
-            break;
-        }
-        auto status = node_future.wait_for(std::chrono::seconds(0));
-#if !defined(__clang__) && defined(__GNUC__) && (__GNUC__ == 4) && (__GNUC_MINOR__ <= 6)
-        if (!status)
-            break;
-#else
-        if (status != std::future_status::ready)
-            break;
-#endif
-        ++numReady;
-    }
-
-    int numAdd = boost::mpi::all_reduce(comm(), numReady, boost::mpi::minimum<int>());
-
-    if (numAdd > 0)
-        m_requireUpdate = true;
-
-    //std::cerr << "adding " << numAdd << " delayed objects, " << m_delayedObjects.size() << " waiting" << std::endl;
-    for (int i = 0; i < numAdd; ++i) {
-        auto &node_future = m_delayedObjects.front().node_future;
-        auto &pro = m_delayedObjects.front().pro;
-        osg::Geode *geode = node_future.get();
-        if (pro->coverRenderObject && geode) {
-            int creatorId = pro->coverRenderObject->getCreator();
-            Creator &creator = getCreator(creatorId);
-
-            auto tr = m_delayedObjects.front().transform;
-            geode->setNodeMask(~(opencover::Isect::Update | opencover::Isect::Intersection));
-            geode->setName(pro->coverRenderObject->getName());
-            tr->addChild(geode);
-            pro->coverRenderObject->setNode(tr);
-            const std::string variant = pro->variant;
-            const int t = pro->timestep;
-            if (t >= 0) {
-                coVRAnimationManager::instance()->addSequence(creator.animated(variant));
+    if (!m_delayedObjects.empty()) {
+        didWork = true;
+        int numReady = 0;
+        for (size_t i = 0; i < m_delayedObjects.size(); ++i) {
+            auto &node_future = m_delayedObjects[i].node_future;
+            if (!node_future.valid()) {
+                std::cerr << "COVER::render(): future not valid" << std::endl;
+                break;
             }
-            osg::ref_ptr<osg::Group> parent = getParent(pro->coverRenderObject.get());
-            parent->addChild(tr);
-        } else if (!pro->coverRenderObject) {
-            std::cerr << rank() << ": discarding delayed object " << m_delayedObjects.front().name
-                      << " - already deleted" << std::endl;
-        } else if (!geode) {
-            //std::cerr << rank() << ": discarding delayed object " << pro->coverRenderObject->getName() << ": no node created" << std::endl;
+            auto status = node_future.wait_for(std::chrono::seconds(0));
+#if !defined(__clang__) && defined(__GNUC__) && (__GNUC__ == 4) && (__GNUC_MINOR__ <= 6)
+            if (!status)
+                break;
+#else
+            if (status != std::future_status::ready)
+                break;
+#endif
+            ++numReady;
         }
-        m_delayedObjects.pop_front();
+
+        int numAdd = boost::mpi::all_reduce(comm(), numReady, boost::mpi::minimum<int>());
+
+        if (numAdd > 0)
+            m_requireUpdate = true;
+
+        //std::cerr << "adding " << numAdd << " delayed objects, " << m_delayedObjects.size() << " waiting" << std::endl;
+        for (int i = 0; i < numAdd; ++i) {
+            auto &node_future = m_delayedObjects.front().node_future;
+            auto &pro = m_delayedObjects.front().pro;
+            osg::Geode *geode = node_future.get();
+            if (pro->coverRenderObject && geode) {
+                int creatorId = pro->coverRenderObject->getCreator();
+                Creator &creator = getCreator(creatorId);
+
+                auto tr = m_delayedObjects.front().transform;
+                geode->setNodeMask(~(opencover::Isect::Update | opencover::Isect::Intersection));
+                geode->setName(pro->coverRenderObject->getName());
+                tr->addChild(geode);
+                pro->coverRenderObject->setNode(tr);
+                const std::string variant = pro->variant;
+                const int t = pro->timestep;
+                if (t >= 0) {
+                    coVRAnimationManager::instance()->addSequence(creator.animated(variant));
+                }
+                osg::ref_ptr<osg::Group> parent = getParent(pro->coverRenderObject.get());
+                parent->addChild(tr);
+            } else if (!pro->coverRenderObject) {
+                std::cerr << rank() << ": discarding delayed object " << m_delayedObjects.front().name
+                          << " - already deleted" << std::endl;
+            } else if (!geode) {
+                //std::cerr << rank() << ": discarding delayed object " << pro->coverRenderObject->getName() << ": no node created" << std::endl;
+            }
+            m_delayedObjects.pop_front();
+        }
+
+        if (numAdd > 0) {
+            //updateStatus();
+        }
     }
 
-    if (numAdd > 0) {
-        //updateStatus();
+    auto now = cover->frameTime();
+    for (auto it = m_delayedFileUnloadMap.begin(); it != m_delayedFileUnloadMap.end();) {
+        didWork = true;
+        if (it->first <= now) {
+            for (const auto &filename: it->second) {
+                coVRFileManager::instance()->unloadFile(filename.c_str());
+            }
+            it = m_delayedFileUnloadMap.erase(it);
+        } else {
+            ++it;
+        }
     }
 
-    return true;
+    return didWork;
 }
 
 bool COVER::addColorMap(const std::string &species, Object::const_ptr colormap)
@@ -706,11 +735,11 @@ bool COVER::addColorMap(const std::string &species, Object::const_ptr colormap)
                              const_cast<unsigned char *>(&texture->pixels()[0]), osg::Image::NO_DELETE);
         cmap.image->dirty();
 
-        cmap.setBlendWithMaterial(texture->hasAttribute("_blend_with_material"));
+        cmap.setBlendWithMaterial(texture->hasAttribute(attribute::BlendWithMaterial));
         VistleGeometryGenerator::unlock();
     }
 
-    std::string plugin = colormap->getAttribute("_plugin");
+    std::string plugin = colormap->getAttribute(attribute::Plugin);
     if (!plugin.empty())
         cover->addPlugin(plugin.c_str());
 
@@ -735,7 +764,7 @@ bool COVER::addColorMap(const std::string &species, Object::const_ptr colormap)
         return true;
     }
 
-    auto att = colormap->getAttribute("_colormap");
+    auto att = colormap->getAttribute(attribute::ColorMap);
     if (att.empty()) {
         ro->removeAttribute("COLORMAP");
     } else {
@@ -822,13 +851,21 @@ std::map<std::string, std::string> COVER::setupEnv(const std::string &bindir)
         std::string covisedir = env["COVISEDIR"];
         std::string archsuffix = env["ARCHSUFFIX"];
 
-        if (covisedir.empty()) {
-            std::string print_covise_env = "print_covise_env";
+        std::string print_covise_env = "print_covise_env";
 #ifdef _WIN32
-            print_covise_env += ".bat";
+        print_covise_env += ".bat";
 #endif
-            if (FILE *fp = popen(print_covise_env.c_str(), "r")) {
-                std::vector<char> buf(10000);
+        std::vector<std::string> cmds;
+        if (covisedir.empty()) {
+            cmds.push_back(print_covise_env);
+        }
+        if (archsuffix.empty()) {
+            cmds.push_back(covisedir + "/bin/" + print_covise_env);
+        }
+
+        for (auto &cmd: cmds) {
+            if (FILE *fp = popen(cmd.c_str(), "r")) {
+                std::vector<char> buf(100000);
                 while (fgets(buf.data(), buf.size(), fp)) {
                     auto sep = std::find(buf.begin(), buf.end(), '=');
                     if (sep != buf.end()) {
@@ -838,11 +875,19 @@ std::map<std::string, std::string> COVER::setupEnv(const std::string &bindir)
                         std::string val = std::string(sep, end);
                         //std::cerr << name << "=" << val << std::endl;
                         env[name] = val;
+                        if (name == "COVISEDIR") {
+                            covisedir = val;
+                        } else if (name == "ARCHSUFFIX") {
+                            archsuffix = val;
+                        }
                     }
                     //ld_library_path = buf.data();
                     //std::cerr << "read ld_lib: " << ld_library_path << std::endl;
                 }
                 pclose(fp);
+                if (!covisedir.empty() && !archsuffix.empty()) {
+                    break;
+                }
             }
         }
     }
@@ -977,6 +1022,17 @@ bool COVER::handleMessage(const message::Message *message, const MessagePayload 
         msg.send_type = cmsg.senderType();
         coVRCommunication::instance()->handleVRB(msg);
         return true;
+    }
+    case vistle::message::SETNAME: {
+        auto ret = Renderer::handleMessage(message, payload);
+        auto &setname = message->as<const message::SetName>();
+        InteractorMap::iterator it = m_interactorMap.find(setname.module());
+        if (it != m_interactorMap.end()) {
+            auto inter = it->second;
+            inter->setDisplayName(setname.name());
+            coVRPluginList::instance()->newInteractor(inter->getObject(), inter);
+        }
+        return ret;
     }
     default:
         break;

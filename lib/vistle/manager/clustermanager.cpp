@@ -15,6 +15,7 @@
 #include <numeric>
 #include <queue>
 #include <sstream>
+#include <string>
 
 #include <vistle/core/message.h>
 #include <vistle/core/messagepayload.h>
@@ -114,8 +115,9 @@ void ClusterManager::Module::unblock(const message::Message &msg) const
         std::cerr << "UNBLOCK: found as frontmost of " << blockers.size() << " blockers: " << msg << std::endl;
 #endif
         blockers.pop_front();
-        assert(blockedMessages.front().buf.uuid() == msg.uuid() && blockedMessages.front().buf.type() == msg.type());
         message::Buffer buf(msg);
+        assert(blockedMessages.front().buf.type() == msg.type());
+        assert(blockedMessages.front().buf.uuid() == msg.uuid());
         blockedMessages.front().payload.ref();
         if (blockedMessages.front().payload)
             buf.setPayloadName(blockedMessages.front().payload.name());
@@ -302,6 +304,7 @@ int ClusterManager::archiveCompressionSpeed() const
 
 const CompressionSettings &ClusterManager::compressionSettings()
 {
+    //TODO: find out why values don't change when setting them in the GUI's Session Parameter Menu?
     if (!m_compressionSettingsValid) {
         m_compressionSettingsValid = true;
 
@@ -320,6 +323,9 @@ const CompressionSettings &ClusterManager::compressionSettings()
         cs.szRelError = getSessionParameter<Float>(state(), CompressionSettings::p_szRelError);
         cs.szPsnrError = getSessionParameter<Float>(state(), CompressionSettings::p_szPsnrError);
         cs.szL2Error = getSessionParameter<Float>(state(), CompressionSettings::p_szL2Error);
+
+        cs.bigWhoopNPar = getSessionParameter<Integer>(state(), CompressionSettings::p_bigWhoopNPar);
+        cs.bigWhoopRate = std::to_string(getSessionParameter<Float>(state(), CompressionSettings::p_bigWhoopRate));
     }
     return m_compressionSettings;
 }
@@ -378,7 +384,6 @@ bool ClusterManager::dispatch(bool &received)
             pq.emplace(mod);
         }
 
-        m_modulePriorityChange.reserve(pq.size());
         while (!pq.empty()) {
             m_modulePriority.emplace_back(pq.top());
             pq.pop();
@@ -664,7 +669,9 @@ bool ClusterManager::handle(const message::Buffer &message, const MessagePayload
         message.destId() == message::Id::Vistle) {
         if (destHub != hubId() || message.type() == message::EXECUTE || message.type() == message::CANCELEXECUTE ||
             message.type() == message::COVER) {
-            return sendHub(message, payload);
+            if (!message.wasBroadcast()) {
+                return sendHub(message, payload);
+            }
         }
     }
 
@@ -822,6 +829,12 @@ bool ClusterManager::handle(const message::Buffer &message, const MessagePayload
         break;
     }
 
+    case message::SETNAME: {
+        const message::SetName &m = message.as<SetName>();
+        result = handlePriv(m);
+        break;
+    }
+
     case message::REMOVEHUB:
     case message::STARTED:
     case message::ADDPORT:
@@ -879,6 +892,11 @@ bool ClusterManager::handlePriv(const message::Trace &trace)
     Communicator::the().dataManager().trace(m_traceMessages);
 
     return true;
+}
+
+bool ClusterManager::handlePriv(const message::SetName &setname)
+{
+    return sendAllLocal(setname);
 }
 
 bool ClusterManager::handlePriv(const message::Quit &quit)
@@ -1051,8 +1069,8 @@ bool ClusterManager::handlePriv(const message::Spawn &spawn)
         sendHub(prep);
 
     // inform newly started module about current parameter values of other modules
-    auto state = m_stateTracker.getState();
-    for (const auto &m: state) {
+    auto state = m_stateTracker.getLockedState();
+    for (const auto &m: state.messages) {
         MessagePayload pl;
         message::Buffer buf(m.message);
         if (m.payload) {
@@ -1340,14 +1358,18 @@ bool ClusterManager::addObjectSource(const message::AddObject &addObj)
         auto iter = addObj.meta().iteration();
         auto &cache = m_outputObjects[key];
         if (cache.generation != gen || cache.iteration != iter) {
+#ifdef DEBUG
             CERR << "clearing cache for " << addObj.senderId() << ":" << addObj.getSenderPort() << std::endl;
+#endif
             cache.objects.clear();
         }
         cache.objects.emplace_back(addObj.objectName());
         cache.generation = gen;
         cache.iteration = iter;
+#ifdef DEBUG
         CERR << "caching " << addObj.objectName() << " for " << addObj.senderId() << ":" << addObj.getSenderPort()
              << ", port=" << port << std::endl;
+#endif
     }
 
     const Port::ConstPortSet *list = portManager().getConnectionList(port);
@@ -1464,7 +1486,6 @@ bool ClusterManager::addObjectDestination(const message::AddObject &addObj, Obje
                         // unblock receiving module
                         addObj2.setUnblocking();
 
-                        std::unique_lock<Communicator> guard(Communicator::the());
                         if (broadcast) {
                             Communicator::the().broadcastAndHandleMessage(addObj2);
                         } else {
@@ -1931,7 +1952,7 @@ bool ClusterManager::handlePriv(const message::SetParameter &setParam)
                 mod->send(setParam);
             }
         } else {
-            return Communicator::the().broadcastAndHandleMessage(setParam);
+            return sendHub(setParam, MessagePayload(), dest);
         }
     } else if (message::Id::isModule(sender) &&
                (sender == setParam.getModule() || setParam.getModule() == message::Id::Config)) {

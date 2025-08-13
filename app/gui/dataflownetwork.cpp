@@ -132,6 +132,7 @@ Module *DataFlowNetwork::newModule(QString modName)
     connect(module, &Module::visibleChanged, this, &DataFlowNetwork::updateConnectionVisibility);
     connect(module, &Module::outputStreamingChanged,
             [this, module](bool enable) { emit toggleOutputStreaming(module->id(), enable); });
+    connect(this, &DataFlowNetwork::highlightModule, module, &Module::highlightModule);
     return module;
 }
 
@@ -184,6 +185,7 @@ void DataFlowNetwork::addModule(int moduleId, const boost::uuids::uuid &spawnUui
         auto pos = getModulePosition(moduleId);
         moveModule(moduleId, pos.x(), pos.y());
     }
+    mod->setDisplayName(QString::fromStdString(m_state.getModuleDisplayName(moduleId)));
 }
 
 void DataFlowNetwork::deleteModule(int moduleId)
@@ -368,6 +370,28 @@ void DataFlowNetwork::itemInfoChanged(QString text, int type, int id, QString po
     }
 }
 
+void DataFlowNetwork::portStateChanged(int state, int id, QString port)
+{
+    if (Module *m = findModule(id)) {
+        if (port.isEmpty()) {
+            std::cerr << "portStateChanged: no port given for module " << id << std::endl;
+            return;
+        }
+        std::lock_guard guard(m_state);
+        const vistle::Port *p = m_state.portTracker()->findPort(id, port.toStdString());
+        if (auto *gp = m->getGuiPort(p)) {
+            gp->setInfo(state, vistle::message::ItemInfo::PortEnableState);
+        }
+    }
+}
+
+void DataFlowNetwork::setDisplayName(int id, QString text)
+{
+    if (Module *m = findModule(id)) {
+        m->setDisplayName(text);
+    }
+}
+
 void DataFlowNetwork::moduleMessage(int senderId, int type, QString message)
 {
     if (Module *m = findModule(senderId)) {
@@ -538,6 +562,30 @@ Module *DataFlowNetwork::findModule(const boost::uuids::uuid &spawnUuid) const
 
     return nullptr;
 }
+
+Module *DataFlowNetwork::findModule(const QPointF &pos) const
+{
+    std::cerr << "findModule: " << pos.x() << ", " << pos.y() << std::endl;
+    for (Module *m: m_moduleList) {
+        if (m->contains(m->mapFromScene(pos))) {
+            return m;
+        }
+    }
+
+    return nullptr;
+}
+
+QList<QString> DataFlowNetwork::getModuleParameters(int id) const
+{
+    QList<QString> qparams;
+    std::lock_guard guard(m_state);
+    auto params = m_state.getParameters(id);
+    for (const auto &p: params) {
+        qparams.append(QString::fromStdString(p));
+    }
+    return qparams;
+}
+
 
 bool DataFlowNetwork::isDark() const
 {

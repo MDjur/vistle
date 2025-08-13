@@ -2,6 +2,7 @@
 #include "modulebrowser.h"
 #include "dataflownetwork.h"
 #include "module.h"
+#include "parameters.h"
 
 #include <QApplication>
 #include <QMenu>
@@ -136,6 +137,9 @@ void DataFlowView::dragEnterEvent(QDragEnterEvent *e)
     if (mimeFormats.contains(ModuleBrowser::mimeFormat())) {
         e->acceptProposedAction();
     }
+    if (mimeFormats.contains(Parameters::mimeFormat())) {
+        e->acceptProposedAction();
+    }
 }
 
 void DataFlowView::dragMoveEvent(QDragMoveEvent *event)
@@ -167,6 +171,21 @@ void DataFlowView::dropEvent(QDropEvent *event)
             QString moduleName;
             stream >> moduleName;
             scene()->addModule(hubId, moduleName, newPos);
+        }
+    }
+    if (event->mimeData()->formats().contains(Parameters::mimeFormat())) {
+        auto module = scene()->findModule(mapToScene(event->pos()));
+        if (module) {
+            QByteArray encoded = event->mimeData()->data(Parameters::mimeFormat());
+            QDataStream stream(&encoded, QIODevice::ReadOnly);
+
+            while (!stream.atEnd()) {
+                int moduleId;
+                stream >> moduleId;
+                QString parameterName;
+                stream >> parameterName;
+                module->showParameters({moduleId, parameterName, mapToGlobal(event->pos())});
+            }
         }
     }
 }
@@ -259,8 +278,6 @@ void DataFlowView::mouseReleaseEvent(QMouseEvent *event)
 void DataFlowView::createActions()
 {
     m_deleteAct = new QAction("Delete Selected", this);
-    m_deleteAct->setShortcuts(QKeySequence::Delete);
-    m_deleteAct->setShortcutContext(Qt::ApplicationShortcut);
     m_deleteAct->setStatusTip("Delete the selected modules and all their connections");
     connect(m_deleteAct, SIGNAL(triggered()), this, SLOT(deleteModules()));
 
@@ -473,8 +490,9 @@ void DataFlowView::zoomAll()
     }
     fitInView(bounds, Qt::KeepAspectRatio);
     auto t = transform();
-    if (t.m11() > 4 || t.m22() > 4) {
-        t.setMatrix(4., t.m12(), t.m13(), t.m21(), 4., t.m23(), t.m31(), t.m32(), t.m33());
+    float MaxScale = 2.5f;
+    if (t.m11() > MaxScale || t.m22() > MaxScale) {
+        t.setMatrix(MaxScale, t.m12(), t.m13(), t.m21(), MaxScale, t.m23(), t.m31(), t.m32(), t.m33());
         setTransform(t);
     }
 }
@@ -513,5 +531,23 @@ bool DataFlowView::isSnapToGrid() const
     return m_snapToGrid;
 }
 
+void DataFlowView::keyPressEvent(QKeyEvent *event)
+{
+    for (auto &mod: selectedModules()) {
+        if (event->key() == Qt::Key_Delete) {
+            // Delete the selected modules
+            for (auto &mod: selectedModules()) {
+                mod->deleteModule();
+            }
+        } else if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+            // Execute the selected module
+            for (auto &mod: selectedModules()) {
+                mod->execModule();
+            }
+        }
+    }
+
+    QGraphicsView::keyPressEvent(event);
+}
 
 } // namespace gui

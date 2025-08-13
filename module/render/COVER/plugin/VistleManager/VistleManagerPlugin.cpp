@@ -85,7 +85,7 @@ bool VistleManagerPlugin::sendVistle(const vistle::message::Message &msg, const 
 {
     message::Buffer buf(msg);
     std::cerr << "sending " << buf << std::endl;
-    std::unique_lock<Communicator> guard(Communicator::the());
+    //std::unique_lock<Communicator> guard(Communicator::the());
     //return Communicator::the().sendMessage(vistle::message::Id::Broadcast, buf, -1, payload);
     return Communicator::the().sendHub(buf, payload);
 }
@@ -135,8 +135,11 @@ VistleManagerPlugin::~VistleManagerPlugin()
 bool VistleManagerPlugin::init()
 {
     set_manager_in_cover_plugin();
+#ifdef VISTLE_USE_MPI
     m_comm = boost::mpi::communicator(coVRMSController::instance()->getAppCommunicator(), boost::mpi::comm_duplicate);
-
+#else
+    m_comm = boost::mpi::communicator(boost::mpi::communicator(), boost::mpi::comm_duplicate);
+#endif
     auto conn = getenv("VISTLE_CONNECTION");
     if (!conn) {
         std::cerr << "did not find VISTLE_CONNECTION environment variable" << std::endl;

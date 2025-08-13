@@ -13,8 +13,9 @@ DEFINE_ENUM_WITH_STRING_CONVERSIONS(Choices, (X)(Y)(Z)(AbsoluteValue))
 
 VecToScalar::VecToScalar(const std::string &name, int moduleID, mpi::communicator comm): Module(name, moduleID, comm)
 {
-    createInputPort("data_in", "vector to be split");
-    createOutputPort("data_out", "extracted scalar data component");
+    auto pin = createInputPort("data_in", "vector to be split");
+    auto pout = createOutputPort("data_out", "extracted scalar data component");
+    linkPorts(pin, pout);
     m_caseParam = addIntParameter("choose_scalar_value", "Choose Scalar Value", 3, Parameter::Choice);
     V_ENUM_SET_CHOICES(m_caseParam, Choices);
 }
@@ -30,7 +31,7 @@ bool VecToScalar::compute()
         return true;
     }
 
-    std::string spec = data_in->getAttribute("_species");
+    std::string spec = data_in->getAttribute(attribute::Species);
     if (!spec.empty())
         spec += "_";
 
@@ -62,7 +63,7 @@ bool VecToScalar::compute()
     }
 
     out->copyAttributes(data_in);
-    out->addAttribute("_species", spec);
+    out->addAttribute(attribute::Species, spec);
     out->setGrid(data_in->grid());
     updateMeta(out);
     addObject("data_out", out);

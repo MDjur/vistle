@@ -26,8 +26,7 @@ EnableTransparency::EnableTransparency(const std::string &name, int moduleID, mp
 {
     Port *din = createInputPort("data_in", "input data", Port::MULTI);
     Port *dout = createOutputPort("data_out", "output data", Port::MULTI);
-
-    din->link(dout);
+    linkPorts(din, dout);
 
     p_transparency = addIntParameter("transparency", "put objects into TRANSPARENT_BIN", 1, Parameter::Boolean);
     p_numPrimitives = addIntParameter("num_primitives", "number of primitives to put into one block", 0);
@@ -50,11 +49,13 @@ bool EnableTransparency::compute()
         out = obj->clone();
 
         if (p_transparency->getValue()) {
-            out->addAttribute("_transparent", "true");
+            out->addAttribute(attribute::Transparent, "true");
+        } else {
+            out->addAttribute(attribute::Transparent, "false");
         }
 
         if (p_numPrimitives->getValue() != 0) {
-            out->addAttribute("_bin_num_primitives", std::to_string(p_numPrimitives->getValue()));
+            out->addAttribute(attribute::BinNumPrimitives, std::to_string(p_numPrimitives->getValue()));
         }
         updateMeta(out);
         m_cache.storeAndUnlock(ent, out);

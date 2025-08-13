@@ -48,6 +48,7 @@ UiController::UiController(int argc, char *argv[], QObject *parent): QObject(par
     m_config = std::make_unique<vistle::config::Access>(hostname, hostname);
     vistle::Directory dir(argc, argv);
     m_config->setPrefix(dir.prefix());
+    configure();
 
     std::string host = "localhost";
     unsigned short port = *m_config->value<int64_t>("system", "net", "controlport", 31093);
@@ -134,6 +135,12 @@ UiController::UiController(int argc, char *argv[], QObject *parent): QObject(par
     m_mainWindow->dataFlowView()->addToToolBar(m_mainWindow->toolBar(), m_mainWindow->layerWidgetPosition());
     connect(m_mainWindow->dataFlowView(), SIGNAL(executeDataFlow()), SLOT(executeDataFlowNetwork()));
     connect(m_mainWindow->dataFlowView(), SIGNAL(visibleLayerChanged(int)), m_scene, SLOT(visibleLayerChanged(int)));
+    connect(m_mainWindow->parameters(), &Parameters::highlightModule, m_scene, &DataFlowNetwork::highlightModule);
+    connect(m_mainWindow->parameters(), &Parameters::disconnectParameters, this,
+            [this](int fromId, QString fromName, int toId, QString toName) {
+                vistle::message::Disconnect disconnect(fromId, fromName.toStdString(), toId, toName.toStdString());
+                m_vistleConnection->sendMessage(disconnect);
+            });
 
     connect(m_mainWindow, SIGNAL(quitRequested(bool &)), SLOT(quitRequested(bool &)));
     connect(m_mainWindow, SIGNAL(newDataFlow()), SLOT(clearDataFlowNetwork()));
@@ -172,6 +179,7 @@ UiController::UiController(int argc, char *argv[], QObject *parent): QObject(par
             SLOT(addModule(int, boost::uuids::uuid, QString)));
     connect(&m_observer, SIGNAL(deleteModule_s(int)), m_scene, SLOT(deleteModule(int)));
     connect(&m_observer, SIGNAL(moduleStateChanged_s(int, int)), m_scene, SLOT(moduleStateChanged(int, int)));
+    connect(&m_observer, SIGNAL(setName_s(int, QString)), m_scene, SLOT(setDisplayName(int, QString)));
     connect(&m_observer, &VistleObserver::message_s, [this](int senderId, int type, QString text) {
         if (m_scene)
             m_scene->moduleMessage(senderId, type, text);
@@ -190,6 +198,7 @@ UiController::UiController(int argc, char *argv[], QObject *parent): QObject(par
             SLOT(setOutputStreaming(int, bool)));
     connect(&m_observer, SIGNAL(itemInfo_s(QString, int, int, QString)), m_scene,
             SLOT(itemInfoChanged(QString, int, int, QString)));
+    connect(&m_observer, SIGNAL(portState_s(int, int, QString)), m_scene, SLOT(portStateChanged(int, int, QString)));
     connect(&m_observer, SIGNAL(newPort_s(int, QString)), m_scene, SLOT(newPort(int, QString)));
     connect(&m_observer, SIGNAL(deletePort_s(int, QString)), m_scene, SLOT(deletePort(int, QString)));
     connect(&m_observer, SIGNAL(newConnection_s(int, QString, int, QString)), m_scene,
@@ -278,6 +287,12 @@ UiController::UiController(int argc, char *argv[], QObject *parent): QObject(par
     m_mainWindow->show();
 
     m_initialized = true;
+}
+
+void UiController::configure()
+{
+    Port::configure();
+    Module::configure();
 }
 
 bool UiController::init()
@@ -736,6 +751,7 @@ void UiController::screenshot(QString imageFile, bool quit)
     if (quit) {
         vistle::message::Quit q;
         m_vistleConnection->sendMessage(q);
+        exit(0);
     }
 }
 void UiController::lockUi(bool locked)

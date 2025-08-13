@@ -108,9 +108,9 @@ static bool sendCoverMessage(int destMod, int subType, size_t len, const char *d
     return sendMessage(cover, &pl);
 }
 
-static bool snapshotGui(const std::string &filename)
+static bool snapshotGui(const std::string &filename, bool quit = false)
 {
-    auto msg = message::Screenshot(filename);
+    auto msg = message::Screenshot(filename, quit);
     msg.setDestId(message::Id::Broadcast);
     return sendMessage(msg);
 }
@@ -350,6 +350,29 @@ static void kill(int id)
         m.setDestId(id);
         sendMessage(m);
     }
+}
+
+static void setModuleDisplayName(int id, const std::string &name)
+{
+#ifdef DEBUG
+    std::cerr << "Python: setModuleDisplayName of " << id << " to " << name << std::endl;
+#endif
+    if (message::Id::isModule(id)) {
+        message::SetName m(id, name);
+        m.setDestId(message::Id::Broadcast); // to master for serialization with Spawn
+        sendMessage(m);
+    }
+}
+
+static std::string getModuleDisplayName(int id)
+{
+#ifdef DEBUG
+    std::cerr << "Python: getModuleDisplayName of " << id << std::endl;
+#endif
+    if (message::Id::isModule(id)) {
+        return state().getModuleDisplayName(id);
+    }
+    return "";
 }
 
 static std::string hubName(int id)
@@ -1504,6 +1527,8 @@ PY_MODULE(_vistle, m)
           "id"_a, "hub"_a, "modulename"_a = "");
     m.def("waitForSpawn", waitForSpawn, "wait for asynchronously spawned module with uuid `arg1` and return its ID");
     m.def("kill", kill, "kill module with ID `arg1`");
+    m.def("setModuleDisplayName", setModuleDisplayName, "id"_a, "name"_a, "set name of module with ID `id` to `name`");
+    m.def("getModuleDisplayName", getModuleDisplayName, "id"_a, "get name of module with ID `id`");
     m.def("connect", connect,
           "connect output `arg2` of module with ID `arg1` to input `arg4` of module with ID `arg3`");
     m.def("disconnect", disconnect,
@@ -1511,7 +1536,7 @@ PY_MODULE(_vistle, m)
     m.def("compute", compute, "trigger execution of module with `id`", "moduleId"_a = message::Id::Broadcast);
     m.def("interrupt", cancelCompute, "interrupt execution of module with ID `arg1`");
     m.def("sendCoverMessage", &sendCoverGuiMessage, "send a coGRMsg to COVER", "msg"_a, "coverModuleId"_a);
-    m.def("snapshotGui", &snapshotGui, "save a snapshot of the mapeditor workflow", "filename"_a);
+    m.def("snapshotGui", &snapshotGui, "save a snapshot of the mapeditor workflow", "filename"_a, "quit"_a = false);
     m.def("quit", quit, "quit vistle session");
     m.def("trace", trace, "enable/disable message tracing for module `id`", "id"_a = message::Id::Broadcast,
           "type"_a = message::ANY, "enable"_a = true);

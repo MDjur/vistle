@@ -2,6 +2,7 @@ vistle_find_package(LZ4)
 #vistle_find_package(ZSTD)
 
 set(core_SOURCES
+    message/setname.cpp
     allobjects.cpp # just one file including all the others for faster compilation
     availablemodule.cpp
     archive_loader.cpp
@@ -9,6 +10,7 @@ set(core_SOURCES
     archives.cpp
     archives_compress.cpp
     archives_compress_sz3.cpp
+    archives_compress_bigwhoop.cpp
     cellalgorithm.cpp
     filequery.cpp
     geometry.cpp
@@ -38,6 +40,7 @@ set(core_SOURCES
 set(core_SOURCES
     ${core_SOURCES}
     celltree.cpp
+    celltreenode.cpp
     coords.cpp
     database.cpp
     empty.cpp
@@ -51,20 +54,24 @@ set(core_SOURCES
     points.cpp
     polygons.cpp
     rectilineargrid.cpp
+    scalars.cpp
     structuredgrid.cpp
     structuredgridbase.cpp
     texture1d.cpp
     uniformgrid.cpp
     unstr.cpp
+    uuid.cpp
     vec.cpp
     vertexownerlist.cpp)
 
 set(core_HEADERS
+    message/setname.h
     archive_loader.h
     archive_saver.h
     archives.h
     archives_compress.h
     archives_compress_sz3.h
+    archives_compress_bigwhoop.h
     archives_config.h
     archives_impl.h
     availablemodule.h
@@ -176,7 +183,7 @@ endif()
 if(WIN32)
     target_link_libraries(vistle_core PUBLIC bcrypt.lib)
 endif()
-
+target_compile_definitions(vistle_core PUBLIC BOOST_MPL_LIMIT_VECTOR_SIZE=30)
 vistle_target_link_libraries(
     vistle_core
     PRIVATE
@@ -190,21 +197,21 @@ vistle_target_link_libraries(
     PUBLIC
     Boost::system
     PUBLIC
-    vtkm::cont)
+    viskores::cont)
 target_link_libraries(vistle_core PRIVATE vistle_config)
 target_link_libraries(vistle_core PUBLIC Eigen3::Eigen)
 
-if(ZFP_FOUND)
-    target_compile_definitions(vistle_core PRIVATE HAVE_ZFP)
-    target_include_directories(vistle_core SYSTEM PRIVATE ${ZFP_INCLUDE_DIRS})
-    vistle_target_link_libraries(vistle_core PRIVATE ${ZFP_LIBRARIES})
-endif()
+target_include_directories(vistle_core SYSTEM PRIVATE ${ZFP_INCLUDE_DIRS})
+vistle_target_link_libraries(vistle_core PRIVATE ${ZFP_LIBRARIES})
 
 if(SZ3_FOUND)
     target_compile_definitions(vistle_core PRIVATE HAVE_SZ3)
     target_include_directories(vistle_core SYSTEM PRIVATE ${SZ3_INCLUDE_DIRS})
     vistle_target_link_libraries(vistle_core PRIVATE ${SZ3_LIBRARIES})
 endif()
+
+target_include_directories(vistle_core SYSTEM PRIVATE ${BIGWHOOP_INCLUDE_DIRS})
+vistle_target_link_libraries(vistle_core PRIVATE bwclib)
 
 if(ZSTD_FOUND)
     target_compile_definitions(vistle_core PRIVATE HAVE_ZSTD)

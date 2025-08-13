@@ -19,7 +19,8 @@ class Port: public QObject, public QGraphicsRectItem {
     typedef QGraphicsRectItem Base;
 
 public:
-    static const double portSize;
+    static double portSize;
+    static void configure();
 
     enum Type {
         Parameter,
@@ -42,6 +43,7 @@ public:
     bool operator<(const Port &other) const;
     bool operator==(const Port &other) const;
     void setInfo(QString info, int type);
+    void setInfo(int flag, int type);
 
 signals:
     void clicked(Port *port);
@@ -66,6 +68,8 @@ private:
     QAction *m_disconnectAct = nullptr;
 
     Type m_portType; //< type of port
+    enum EnableState { Enabled, Disabled, Optional };
+    EnableState m_enableState = Enabled;
     const vistle::Port *m_port = nullptr;
     QColor m_color;
     Module *m_module = nullptr;

@@ -11,6 +11,8 @@
 #include <future>
 #include <condition_variable>
 #include <signal.h>
+#include <string>
+#include <limits>
 #ifdef VISTLE_USE_FMT
 #include <fmt/format.h>
 #include <fmt/args.h>
@@ -47,8 +49,6 @@
 #include <boost/asio.hpp>
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/program_options.hpp>
-#include <boost/process.hpp>
-#include <boost/process/extend.hpp>
 #ifdef __linux__
 #include <sys/prctl.h>
 #endif
@@ -65,7 +65,6 @@
 //#define DEBUG_DISTRIBUTED
 
 namespace asio = boost::asio;
-namespace process = boost::process;
 using std::shared_ptr;
 namespace dir = vistle::directory;
 
@@ -272,14 +271,14 @@ void HubParameters::sendParameterMessage(const message::Message &message, const 
 }
 
 Hub::Hub(bool inManager)
-: m_inManager(inManager)
+: m_stateTracker(message::Id::Invalid, "Hub state")
+, m_inManager(inManager)
 , m_basePort(31093)
 , m_port(0)
 , m_masterPort(m_basePort)
 , m_masterHost("localhost")
 , m_acceptorv4(new boost::asio::ip::tcp::acceptor(m_ioContext))
 , m_acceptorv6(new boost::asio::ip::tcp::acceptor(m_ioContext))
-, m_stateTracker(message::Id::Invalid, "Hub state")
 , m_uiManager(*this, m_stateTracker)
 , m_managerConnected(false)
 , m_quitting(false)
@@ -496,6 +495,11 @@ bool Hub::init(int argc, char *argv[])
 
     m_messageBacklog = *m_config->value<int64_t>("system", "hub", "messagebacklog", m_messageBacklog);
 
+    double portDistance = *m_config->value<double>("gui", "module", "port_spacing", 0.);
+    double portSize = *m_config->value<double>("gui", "module", "port_size", 0.);
+    m_gridSpacingX = portDistance + portSize;
+    m_gridSpacingY = m_gridSpacingX;
+
     namespace po = boost::program_options;
     auto desc = options();
     desc.add_options()("quiet,q", "run quietly")("verbose,v", new CountValue(&m_verbose),
@@ -609,12 +613,13 @@ bool Hub::init(int argc, char *argv[])
         m_conferenceUrl = vm["conference"].as<std::string>();
     }
 
-    std::string url;
+    std::string file;
     ConnectionData connectionData;
     if (vm.count("url") == 1) {
-        url = vm["url"].as<std::string>();
-        if (VistleUrl::parse(url, connectionData)) {
-            url.clear();
+        file = vm["url"].as<std::string>();
+        Url url(file);
+        if (VistleUrl::parse(file, connectionData)) {
+            file.clear();
             m_isMaster = connectionData.master;
             if (m_isMaster) {
                 m_port = connectionData.port;
@@ -631,11 +636,40 @@ bool Hub::init(int argc, char *argv[])
             if (connectionData.kind == "/ui" || connectionData.kind == "/gui") {
                 std::string uipath = m_dir->bin() + uiCmd;
                 startUi(uipath, true);
+            } else if (connectionData.kind == "/open" || connectionData.kind == "/exec" ||
+                       connectionData.kind == "/execute") {
+                using boost::algorithm::ends_with;
+                auto wf = url.fragment();
+
+                file.clear();
+                for (vistle::filesystem::path dir(m_dir->prefix()); dir.has_parent_path(); dir = dir.parent_path()) {
+                    if (!vistle::filesystem::exists(dir))
+                        break;
+                    auto exts = {"", ".vsl", ".py"};
+                    for (const auto &ext: exts) {
+                        auto wf_ext = wf + ext;
+                        if (vistle::filesystem::exists(dir / wf_ext)) {
+                            file = (dir / wf_ext).string();
+                            break;
+                        }
+                    }
+                    dir = dir.parent_path();
+                }
+                if (file.empty()) {
+                    CERR << "could not locate workflow file " << wf << " in " << m_dir->prefix() << " and its parents"
+                         << std::endl;
+                    return false;
+                } else if (connectionData.kind == "/open") {
+                    CERR << "opening workflow from " << file << std::endl;
+                } else {
+                    m_barrierAfterLoad = true;
+                    m_executeModules = true;
+                    CERR << "executing workflow from " << file << std::endl;
+                }
             }
         } else {
-            Url u(url);
-            if (u.valid() && u.scheme() == "file") {
-                url = u.path();
+            if (url.valid() && url.scheme() == "file") {
+                file = url.path();
             }
         }
     }
@@ -737,10 +771,10 @@ bool Hub::init(int argc, char *argv[])
         m_masterPort = m_port;
         m_dataProxy->setHubId(m_hubId);
 
-        m_scriptPath = url;
+        m_scriptPath = file;
     } else {
-        if (!url.empty())
-            m_name = url;
+        if (!file.empty())
+            m_name = file;
 
         if (!connectToMaster(m_masterHost, m_masterPort)) {
             CERR << "failed to connect to master at " << m_masterHost << ":" << m_masterPort << std::endl;
@@ -912,9 +946,9 @@ Hub::launchProcess(int type, const std::string &prog, const std::vector<std::str
     auto out = std::make_shared<process::ipstream>();
     auto err = std::make_shared<process::ipstream>();
     try {
-        child = std::make_shared<process::child>(path, process::args(args), terminate_with_parent(),
-                                                 process::std_out > *out, process::std_err > *err, m_ioContext,
-                                                 process::on_exit(exit_handler));
+        child = std::make_shared<process::child>(
+            path, process::args(args), terminate_with_parent(), process::std_out > *out, process::std_err > *err,
+            process::std_in < process::null, m_ioContext, process::on_exit(exit_handler));
     } catch (std::exception &ex) {
         std::stringstream info;
         info << "Failed to launch: " << path << ": " << ex.what();
@@ -978,7 +1012,7 @@ Hub::launchProcess(int type, const std::string &prog, const std::vector<std::str
                 obs.sendTextToUi(stream, discardCount + buf.size(), line, obs.moduleId);
             }
             buf.emplace_back(stream, line);
-            while (buf.size() > m_messageBacklog) {
+            while (m_messageBacklog >= 0 && buf.size() > size_t(m_messageBacklog)) {
                 ++discardCount;
                 buf.pop_front();
             }
@@ -1291,8 +1325,8 @@ void Hub::slaveReady(Slave &slave)
 
     startIoThread();
 
-    auto state = m_stateTracker.getState();
-    for (auto &m: state) {
+    auto state = m_stateTracker.getLockedState();
+    for (auto &m: state.messages) {
         sendMessage(slave.sock, m.message, m.payload.get());
     }
     slave.ready = true;
@@ -1388,6 +1422,8 @@ bool Hub::dispatch()
             }
         }
 
+        if (m_dataProxy)
+            m_dataProxy->cleanUp();
         m_tunnelManager.cleanUp();
     }
 
@@ -1762,6 +1798,15 @@ bool Hub::hubReady()
             session.addFloatParameter(CompressionSettings::p_szL2Error, "SZ3 L2 norm error tolerance", cs.szL2Error);
         session.setParameterMinimum(szL2, Float(0.));
 
+        session.setCurrentParameterGroup("BigWhoop");
+        auto bwNPar = session.addIntParameter(CompressionSettings::p_bigWhoopNPar,
+                                              "BigWhoop number of independent parameters", cs.bigWhoopNPar);
+        session.setParameterRange(bwNPar, Integer(1), Integer(std::numeric_limits<uint8_t>::max()));
+
+        auto bwRate = session.addFloatParameter(CompressionSettings::p_bigWhoopRate, "BigWhoop compression rate",
+                                                std::stof(cs.bigWhoopRate));
+        session.setParameterMinimum(bwRate, Float(0.));
+
         session.setCurrentParameterGroup("");
 
         for (auto s: m_slavesToConnect) {
@@ -1824,7 +1869,8 @@ bool Hub::hubReady()
     return true;
 }
 
-bool Hub::handleMessage(const message::Message &recv, Hub::socket_ptr sock, const buffer *payload)
+bool Hub::handleMessage(const message::Message &recv, Hub::socket_ptr sock, const buffer *payload,
+                        message::Identify::Identity senderType)
 {
     using namespace vistle::message;
 
@@ -1845,7 +1891,6 @@ bool Hub::handleMessage(const message::Message &recv, Hub::socket_ptr sock, cons
 
     message::Buffer buf(recv);
     Message &msg = buf;
-    message::Identify::Identity senderType = message::Identify::UNKNOWN;
     {
         std::unique_lock<std::mutex> lock(m_socketMutex);
         auto it = m_sockets.find(sock);
@@ -1874,7 +1919,7 @@ bool Hub::handleMessage(const message::Message &recv, Hub::socket_ptr sock, cons
     }
     case message::CLOSECONNECTION: {
         auto &mm = msg.as<CloseConnection>();
-        CERR << "remote closes socket: " << mm.reason() << std::endl;
+        CERR << "remote closes socket - reason: " << mm.reason() << std::endl;
         removeSocket(sock);
         if (senderType == Identify::HUB || senderType == Identify::MANAGER) {
             CERR << "terminating." << std::endl;
@@ -1957,6 +2002,7 @@ bool Hub::handleMessage(const message::Message &recv, Hub::socket_ptr sock, cons
 
             if (m_hubId == Id::MasterHub) {
                 auto master = addHubForSelf();
+                master.setDestId(Id::Broadcast);
                 if (m_verbose >= Verbosity::Manager) {
                     CERR << "principal hub: " << master << std::endl;
                 }
@@ -1968,8 +2014,8 @@ bool Hub::handleMessage(const message::Message &recv, Hub::socket_ptr sock, cons
                 auto set = make.message<message::SetId>(m_hubId);
                 sendMessage(sock, set);
                 if (message::Id::isHub(m_hubId)) {
-                    auto state = m_stateTracker.getState();
-                    for (auto &m: state) {
+                    auto state = m_stateTracker.getLockedState();
+                    for (auto &m: state.messages) {
                         sendMessage(sock, m.message, m.payload.get());
                     }
                 }
@@ -2200,6 +2246,12 @@ bool Hub::handleMessage(const message::Message &recv, Hub::socket_ptr sock, cons
             break;
         }
 
+        case message::SETNAME: {
+            auto &setname = static_cast<const SetName &>(msg);
+            handlePriv(setname);
+            break;
+        }
+
         case message::ADDHUB: {
             auto &add = static_cast<const AddHub &>(msg);
             if (m_isMaster && add.hasUserInterface()) {
@@ -2374,6 +2426,7 @@ bool Hub::handleMessage(const message::Message &recv, Hub::socket_ptr sock, cons
                     modId = 0;
 #endif
                     long mpipid = 0;
+#ifdef VISTLE_USE_MPI
                     bool found = false;
                     std::unique_lock<std::mutex> guard(m_processMutex);
                     for (auto &p: m_processMap) {
@@ -2393,6 +2446,7 @@ bool Hub::handleMessage(const message::Message &recv, Hub::socket_ptr sock, cons
                         sendError(str.str());
                         break;
                     }
+#endif
                     nargs.push_back(fmt::arg("mpipid", mpipid));
                 }
                 if (auto home = getenv("HOME")) {
@@ -2509,8 +2563,8 @@ bool Hub::handleMessage(const message::Message &recv, Hub::socket_ptr sock, cons
             }
             if (m_managerConnected) {
 #if 0
-               auto state = m_stateTracker.getState();
-               for (auto &m: state) {
+               auto state = m_stateTracker.getLockedState();
+               for (auto &m: state.messages) {
                   sendMessage(sock, m);
                }
 #endif
@@ -2684,129 +2738,159 @@ bool Hub::handlePlainSpawn(message::Spawn &notify, bool doSpawn, bool error)
     }
     return true;
 }
-
-bool Hub::handlePriv(const message::Spawn &spawnRecv)
+bool Hub::notifySpawnError(message::Spawn &notify)
 {
-    bool error = false;
-    message::Spawn spawn(spawnRecv);
+    return handlePlainSpawn(notify, false, true);
+}
+
+bool Hub::handlePriv(const message::Spawn &spawn)
+{
     std::string moduleName(spawn.getName());
     bool isCover = moduleName == "COVER";
 
-    if (m_isMaster) {
-        bool restart = spawn.getReferenceType() == message::Spawn::ReferenceType::Migrate;
-        bool shouldMirror = (spawn.getReferenceType() == message::Spawn::ReferenceType::None && isCover) &&
-                            m_stateTracker.getHubData(spawn.hubId()).hasUi;
-        bool clone = spawn.getReferenceType() == message::Spawn::ReferenceType::Clone;
-        bool cloneLinked = spawn.getReferenceType() == message::Spawn::ReferenceType::LinkedClone;
-
-        bool someFormOfCopy = restart || clone || cloneLinked;
-
-        auto notify = spawn;
-        notify.setReferrer(spawn.uuid());
-        notify.setSenderId(m_hubId);
-        bool doSpawn = false;
-        int mirroredId = Id::Invalid;
-        if (spawn.spawnId() == Id::Invalid) {
-            notify.setSpawnId(Id::ModuleBase + m_moduleCount);
-            mirroredId = Id::ModuleBase + m_moduleCount;
-            ++m_moduleCount;
-            std::string suffix = "[" + std::to_string(mirroredId) + "]";
-
-            session.setCurrentParameterGroup("Workflow", false);
-            session.addIntParameter("layer" + suffix, "layer for module " + std::to_string(mirroredId), Integer(0));
-            session.addVectorParameter("position" + suffix, "position for module " + std::to_string(mirroredId),
-                                       ParamVector(0., 0.));
-            session.setCurrentParameterGroup("", false);
-
-            doSpawn = true;
-            if (spawn.hubId() == m_hubId) {
-                if (isCover && m_coverIsManager) {
-                    spawn.setAsPlugin(true);
-                    notify.setAsPlugin(true);
-                }
-            }
-        } else if (someFormOfCopy) {
-            doSpawn = true;
-            someFormOfCopy = false;
+    auto notify = spawn;
+    if (spawn.hubId() == m_hubId) {
+        if (isCover && m_coverIsManager) {
+            notify.setAsPlugin(true);
         }
-        if (shouldMirror)
-            notify.setMirroringId(mirroredId);
-        auto hubs = m_stateTracker.getHubs();
-        if (std::find(hubs.begin(), hubs.end(), spawn.hubId()) == hubs.end()) {
-            std::stringstream str;
-            str << "hub with id " << spawn.hubId() << " not known";
-            sendError(str.str());
-            error = true;
-        }
-        if (!error && someFormOfCopy) {
-            spawn.setSpawnId(notify.spawnId());
-            if (restart) {
-                if (doSpawn) {
-                    if (!cacheModuleValues(spawn.migrateId(), notify.spawnId())) {
-                        sendError("cannot migrate module with id " + std::to_string(spawn.getReference()));
-                        return handlePlainSpawn(notify, doSpawn, true);
-                    }
-                    if (!editDelayedConnects(spawn.migrateId(), notify.spawnId())) {
-                        sendError("cannot migrate module with id " + std::to_string(spawn.getReference()));
-                        return handlePlainSpawn(notify, doSpawn, true);
-                    }
-                }
-                m_sendAfterExit[spawn.migrateId()].push_back(spawn);
-                killOldModule(spawn.migrateId());
-                return true;
-            } else if (clone) {
-                if (doSpawn) {
-                    if (!copyModuleParams(spawn.getReference(), notify.spawnId())) {
-                        sendError("cannot clone module with id " + std::to_string(spawn.getReference()));
-                        return handlePlainSpawn(notify, doSpawn, true);
-                    }
-                }
-                handleMessage(spawn);
-                return true;
-            } else if (cloneLinked) {
-                if (doSpawn) {
-                    if (!linkModuleParams(spawn.getReference(), notify.spawnId())) {
-                        sendError("cannot clone module with id " + std::to_string(spawn.getReference()));
-                        return handlePlainSpawn(notify, doSpawn, true);
-                    }
-                }
-                handleMessage(spawn);
-                return true;
-            }
-        }
-        handlePlainSpawn(notify, doSpawn, error);
+    }
 
-        if (!error && doSpawn && shouldMirror) {
-            for (auto &hubid: m_stateTracker.getHubs()) {
-                if (hubid == spawn.hubId())
-                    continue;
-                if (hubid == Id::MasterHub && m_isMaster && m_proxyOnly)
-                    continue;
-                const auto &hub = m_stateTracker.getHubData(hubid);
-                if (!hub.hasUi)
-                    continue;
-
-                spawnMirror(hubid, spawn.getName(), mirroredId);
-            }
-        }
-    } else {
+    if (!m_isMaster) {
         if (m_verbose >= Verbosity::Normal) {
             CERR << "SLAVE: handle spawn: " << spawn << std::endl;
         }
         if (spawn.spawnId() == Id::Invalid) {
-            sendMaster(spawn);
-        } else {
-            if (spawn.hubId() == m_hubId) {
-                if (isCover && m_coverIsManager) {
-                    spawn.setAsPlugin(true);
+            return sendMaster(spawn);
+        }
+
+        m_stateTracker.handle(notify, nullptr);
+        sendManager(notify);
+        sendUi(notify);
+        return true;
+    }
+
+    notify.setReferrer(spawn.uuid());
+    notify.setSenderId(m_hubId);
+
+    auto hubs = m_stateTracker.getHubs();
+    if (std::find(hubs.begin(), hubs.end(), spawn.hubId()) == hubs.end()) {
+        std::stringstream str;
+        str << "hub with id " << spawn.hubId() << " not known";
+        sendError(str.str());
+        return notifySpawnError(notify);
+    }
+
+    bool shouldMirror = isCover && m_stateTracker.getHubData(spawn.hubId()).hasUi;
+    bool migrateOrRestart = spawn.getReferenceType() == message::Spawn::ReferenceType::Migrate;
+    bool clone = spawn.getReferenceType() == message::Spawn::ReferenceType::Clone;
+    bool cloneLinked = spawn.getReferenceType() == message::Spawn::ReferenceType::LinkedClone;
+
+    bool migrate = false;
+    bool restart = false;
+    if (migrateOrRestart && spawn.getReference() != Id::Invalid) {
+        int oldHub = m_stateTracker.getHub(spawn.getReference());
+        restart = oldHub == spawn.hubId();
+        migrate = !restart;
+    }
+    bool someFormOfCopy = restart || migrate || clone || cloneLinked;
+
+    bool doSpawn = false;
+    int newId = spawn.spawnId();
+    int mirroringId = Id::Invalid;
+    if (spawn.spawnId() == Id::Invalid) {
+        newId = Id::ModuleBase + m_moduleCount;
+        ++m_moduleCount;
+        notify.setSpawnId(newId);
+        std::string suffix = "[" + std::to_string(newId) + "]";
+
+        session.setCurrentParameterGroup("Workflow", false);
+        session.addIntParameter("layer" + suffix, "layer for module " + std::to_string(newId), Integer(0));
+        session.addVectorParameter("position" + suffix, "position for module " + std::to_string(newId),
+                                   ParamVector(0., 0.));
+        session.setCurrentParameterGroup("", false);
+
+        doSpawn = true;
+    } else if (someFormOfCopy) {
+        doSpawn = true;
+        someFormOfCopy = false;
+    }
+
+    if (shouldMirror) {
+        mirroringId = newId;
+        if (restart) {
+            mirroringId = m_stateTracker.getMirrorId(spawn.getReference());
+            CERR << "restarting module " << spawn.getReference() << " as " << newId << " with mirroring id "
+                 << mirroringId << std::endl;
+            CERR << "restart " << notify << std::endl;
+        }
+        notify.setMirroringId(mirroringId);
+    }
+
+    if (someFormOfCopy) {
+        if (migrateOrRestart) {
+            if (doSpawn) {
+                if (!cacheModuleValues(spawn.getReference(), newId)) {
+                    sendError("cannot migrate module with id " + std::to_string(spawn.getReference()));
+                    return notifySpawnError(notify);
+                }
+                if (!editDelayedConnects(spawn.getReference(), newId)) {
+                    sendError("cannot migrate module with id " + std::to_string(spawn.getReference()));
+                    return notifySpawnError(notify);
                 }
             }
-            m_stateTracker.handle(spawn, nullptr);
-            sendManager(spawn);
-            sendUi(spawn);
+            m_sendAfterExit[spawn.getReference()].push_back(notify);
+            killOldModule(spawn.getReference());
+            return true;
+        } else if (clone) {
+            if (doSpawn) {
+                if (!copyModuleParams(spawn.getReference(), newId, true)) {
+                    sendError("cannot clone module with id " + std::to_string(spawn.getReference()));
+                    return notifySpawnError(notify);
+                }
+            }
+            return handleMessage(notify);
+        } else if (cloneLinked) {
+            if (doSpawn) {
+                if (!linkModuleParams(spawn.getReference(), newId)) {
+                    sendError("cannot clone module with id " + std::to_string(spawn.getReference()));
+                    return notifySpawnError(notify);
+                }
+            }
+            return handleMessage(notify);
         }
     }
 
+    handlePlainSpawn(notify, doSpawn, false);
+
+    if (doSpawn && shouldMirror && !restart) {
+        for (auto &hubid: m_stateTracker.getHubs()) {
+            if (hubid == spawn.hubId())
+                continue;
+            if (hubid == Id::MasterHub && m_isMaster && m_proxyOnly)
+                continue;
+            const auto &hub = m_stateTracker.getHubData(hubid);
+            if (!hub.hasUi)
+                continue;
+
+            spawnMirror(hubid, spawn.getName(), newId);
+        }
+    }
+    return true;
+}
+
+bool Hub::handlePriv(const message::SetName &setname)
+{
+    if (m_isMaster || setname.destId() == Id::Broadcast) {
+        m_stateTracker.handle(setname, nullptr);
+        sendUi(setname);
+        sendManager(setname, Id::LocalHub);
+    } else if (m_isMaster) {
+        auto buf = setname;
+        buf.setDestId(Id::Broadcast);
+        sendUi(setname);
+        sendManager(setname, Id::LocalHub);
+        sendSlaves(buf, true);
+    }
     return true;
 }
 
@@ -2998,15 +3082,43 @@ bool Hub::isCachable(int oldModuleId, int newModuleId)
     return true;
 }
 
-void Hub::cacheParameters(int oldModuleId, int newModuleId)
+void Hub::cacheParameters(int oldModuleId, int newModuleId, bool clone)
 {
     auto paramNames = m_stateTracker.getParameters(oldModuleId);
     for (const auto &pn: paramNames) {
         auto p = m_stateTracker.getParameter(oldModuleId, pn);
         if (!p->isDefault()) {
-            auto pm = message::SetParameter(newModuleId, p->getName(), p);
+            auto pm = make.message<message::SetParameter>(newModuleId, p->getName(), p);
             pm.setDelayed();
             pm.setDestId(newModuleId);
+            m_sendAfterSpawn[newModuleId].emplace_back(pm);
+        }
+    }
+
+    restoreModulePosition(oldModuleId, newModuleId, clone);
+}
+
+void Hub::restoreModulePosition(int oldModuleId, int newModuleId, bool clone)
+{
+    std::string suffix = "[" + std::to_string(oldModuleId) + "]";
+    std::string nsuffix = "[" + std::to_string(newModuleId) + "]";
+    for (auto pnbase: {"position", "layer"}) {
+        auto po = std::string(pnbase) + suffix;
+        auto pn = std::string(pnbase) + nsuffix;
+        auto p = session.findParameter(po);
+        if (p && (!p->isDefault() || (clone && pnbase == std::string("position")))) {
+            auto pm = message::SetParameter(newModuleId, pn, p);
+            if (auto vp = std::dynamic_pointer_cast<VectorParameter>(p)) {
+                if (clone) {
+                    auto pos = vp->getValue();
+                    pos[0] -= m_gridSpacingX;
+                    pos[1] += m_gridSpacingY;
+                    pm = message::SetParameter(newModuleId, pn, pos);
+                }
+            }
+
+            pm.setDelayed();
+            pm.setDestId(session.id());
             m_sendAfterSpawn[newModuleId].emplace_back(pm);
         }
     }
@@ -3043,10 +3155,8 @@ void Hub::cacheParamConnections(int oldModuleId, int newModuleId)
 {
     auto paramNames = m_stateTracker.getParameters(oldModuleId);
     for (const auto &pn: paramNames) {
-        if (pn != "_position" || pn != "_layer") {
-            auto cm = message::Connect(oldModuleId, pn, newModuleId, pn);
-            m_sendAfterSpawn[newModuleId].emplace_back(cm);
-        }
+        auto cm = message::Connect(oldModuleId, pn, newModuleId, pn);
+        m_sendAfterSpawn[newModuleId].emplace_back(cm);
     }
 }
 
@@ -3075,24 +3185,28 @@ bool Hub::editDelayedConnects(int oldModuleId, int newModuleId)
 
 bool Hub::cacheModuleValues(int oldModuleId, int newModuleId)
 {
+    if (!stateTracker().getModuleDisplayName(oldModuleId).empty()) {
+        auto setname = make.message<message::SetName>(newModuleId, stateTracker().getModuleDisplayName(oldModuleId));
+        m_sendAfterSpawn[newModuleId].emplace_back(setname);
+    }
     if (!copyModuleParams(oldModuleId, newModuleId))
         return false;
     cachePortConnections(oldModuleId, newModuleId);
     return true;
 }
 
-bool Hub::copyModuleParams(int oldModuleId, int newModuleId)
+bool Hub::copyModuleParams(int oldModuleId, int newModuleId, bool clone)
 {
     if (!Id::isModule(oldModuleId))
         return false;
-    cacheParameters(oldModuleId, newModuleId);
+    cacheParameters(oldModuleId, newModuleId, clone);
     applyAllDelayedParameters(oldModuleId, newModuleId);
     return true;
 }
 
 bool Hub::linkModuleParams(int oldModuleId, int newModuleId)
 {
-    if (!copyModuleParams(oldModuleId, newModuleId))
+    if (!copyModuleParams(oldModuleId, newModuleId, true))
         return false;
     cacheParamConnections(oldModuleId, newModuleId);
     return true;
@@ -3171,8 +3285,10 @@ void Hub::setLoadedFile(const std::string &file)
 void Hub::setSessionUrl(const std::string &url)
 {
     m_sessionUrl = url;
-    std::cerr << "Share this: " << url << std::endl;
-    std::cerr << std::endl;
+    if (verbosity() >= Verbosity::Normal) {
+        std::cerr << "Share this: " << url << std::endl;
+        std::cerr << std::endl;
+    }
     auto t = make.message<message::UpdateStatus>(message::UpdateStatus::SessionUrl, url);
     m_stateTracker.handle(t, nullptr);
     sendUi(t);
@@ -3438,7 +3554,7 @@ bool Hub::startUi(const std::string &uipath, bool replace)
     args.push_back(m_masterHost);
     args.push_back(port);
     if (replace) {
-        boost::process::system(uipath, process::args(args));
+        process::system(uipath, process::args(args));
         exit(0);
         return false;
     }
@@ -3454,7 +3570,7 @@ bool Hub::startUi(const std::string &uipath, bool replace)
 
 bool Hub::startPythonUi()
 {
-    std::vector<std::string> python_shells{"ipython", "ipython3", "python", "python3"};
+    std::vector<std::string> python_shells{"ipython", "ipython3", "python", "${Python_EXECUTABLE}"};
     std::string port = std::to_string(this->m_masterPort);
 
     std::string ipython = "ipython";
@@ -3768,13 +3884,15 @@ bool Hub::handlePriv(const message::Barrier &barrier)
     }
     assert(!m_barrierActive);
     assert(m_reachedSet.empty());
-    m_barrierActive = true;
-    m_barrierUuid = barrier.uuid();
-    message::Buffer buf(barrier);
-    buf.setDestId(Id::NextHop);
-    if (m_isMaster)
-        sendSlaves(buf, true);
-    sendManager(buf);
+    if (m_stateTracker.getNumRunning() > 0) {
+        m_barrierActive = true;
+        m_barrierUuid = barrier.uuid();
+        message::Buffer buf(barrier);
+        buf.setDestId(Id::NextHop);
+        if (m_isMaster)
+            sendSlaves(buf, true);
+        sendManager(buf);
+    }
     return true;
 }
 
@@ -3954,6 +4072,7 @@ bool Hub::handlePriv(const message::ModuleExit &exit)
         handleMessage(r);
     }
 
+    bool restarting = false;
     if (!crashed) {
         std::vector<message::Disconnect> disconnects;
         auto inputs = m_stateTracker.portTracker()->getConnectedInputPorts(id);
@@ -3987,19 +4106,20 @@ bool Hub::handlePriv(const message::ModuleExit &exit)
                 handleMessage(m);
             }
             m_sendAfterExit.erase(it2);
+            restarting = true;
         }
+    }
 
-        if (m_isMaster) {
-            const auto &hub = m_stateTracker.getHubData(idToHub(id));
-            if (!hub.isQuitting) {
-                auto mirrors = m_stateTracker.getMirrors(id);
-                for (auto m: mirrors) {
-                    if (m == id)
-                        continue;
-                    auto kill = message::Kill(m);
-                    kill.setDestId(m);
-                    handleMessage(kill);
-                }
+    if (m_isMaster && !exit.leaveMirrorGroup() && !restarting) {
+        const auto &hub = m_stateTracker.getHubData(idToHub(id));
+        if (!hub.isQuitting) {
+            auto mirrors = m_stateTracker.getMirrors(id);
+            for (auto m: mirrors) {
+                if (m == id)
+                    continue;
+                auto kill = message::Kill(m);
+                kill.setDestId(m);
+                handleMessage(kill);
             }
         }
     }
@@ -4030,6 +4150,10 @@ bool Hub::handlePriv(const message::Cover &cover, const buffer *payload)
         return sendMaster(cover, payload);
     }
 
+    if (m_vrbMode == VrbMode::VrbNo) {
+        return false;
+    }
+
     if (m_vrbPort == 0) {
         if (std::chrono::steady_clock::now() - m_lastVrbStart < std::chrono::seconds(m_vrbStartWait)) {
             return false;
@@ -4051,8 +4175,6 @@ bool Hub::handlePriv(const message::Cover &cover, const buffer *payload)
 
     //CERR << "handling: " << cover << std::endl;
 
-    auto mid = cover.mirrorId();
-    auto mirrors = m_stateTracker.getMirrors(mid);
     socket_ptr sock;
     auto it = m_vrbSockets.find(cover.senderId());
     if (it == m_vrbSockets.end()) {
@@ -4201,6 +4323,7 @@ bool Hub::checkChildProcesses(bool emergency, bool onMainThread)
                 // synthesize ModuleExit message for crashed modules
                 auto m = make.message<message::ModuleExit>(true /* crashed*/);
                 m.setSenderId(id);
+                m.setLeaveMirrorGroup(true);
                 sendManager(m); // will be returned and forwarded to master hub
             }
         }
@@ -4254,6 +4377,11 @@ void Hub::emergencyQuit()
         checkOutstandingDataConnections();
         lock.lock();
     }
+
+    m_stateTracker.cancel();
+
+    if (m_dataProxy)
+        m_dataProxy->cleanUp();
 
     m_workGuard.reset();
     m_ioContext.stop();
@@ -4312,6 +4440,7 @@ void Hub::spawnModule(const std::string &path, const std::string &name, int spaw
         sendError(str.str());
         auto ex = make.message<message::ModuleExit>();
         ex.setSenderId(spawnId);
+        ex.setLeaveMirrorGroup(true);
         sendManager(ex);
     }
 }
@@ -4342,7 +4471,7 @@ void Hub::updateLinkedParameters(const message::SetParameter &setParam)
                     // don't update parameter which was set originally again
                     continue;
                 }
-                message::SetParameter set(p->module(), p->getName(), appliedParam);
+                auto set = make.message<message::SetParameter>(p->module(), p->getName(), appliedParam);
                 set.setDestId(p->module());
                 set.setUuid(setParam.uuid());
                 sendAll(set);

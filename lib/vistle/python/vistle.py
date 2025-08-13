@@ -185,13 +185,18 @@ def isModuleParameter(name):
       return None
    return int(m.group(1))
 
+def adaptModuleParameter(name, oldIdx, newIdx):
+   m = re.search(r'\[([0-9]+)\]$', name)
+   return re.sub(f'\\[{oldIdx}\\]$', f'[{newIdx}]', name)
+
 def saveParameters(f, mod):
       ses = _vistle.getVistleSession()
       params = _vistle.getParameters(ses)
       for p in params:
          if isModuleParameter(p) == mod:
             if not _vistle.isParameterDefault(ses, p):
-               f.write("set"+getParameterType(ses,p)+"Param("+modvar(ses)+", '"+p+"', "+str(getSavableParam(ses,p))+")\n")
+               np = adaptModuleParameter(p, mod, "{"+modvar(mod)+"}")
+               f.write("set"+getParameterType(ses,p)+"Param("+modvar(ses)+", f'"+np+"', "+str(getSavableParam(ses,p))+")\n")
       params = _vistle.getParameters(mod)
       paramChanges = False
       for p in params:
@@ -223,6 +228,8 @@ def saveWorkflow(f, mods, numSlaves, remote):
       if (remote and hub==_vistle.getMasterHub()) or (not remote and hub!=_vistle.getMasterHub()):
             continue
       f.write(modvar(m)+" = waitForSpawn(u"+modvar(m)+")\n")
+      if _vistle.getModuleDisplayName(m) != "":
+         f.write("setModuleDisplayName(" + modvar(m) + ", '" +_vistle.getModuleDisplayName(m)+"')\n")
       saveParameters(f, m)
 
    if remote:
@@ -352,8 +359,8 @@ def snapshotCover(modId, file):
         msg = coGRMsg.coGRSnapshotMsg(file, "snapOnce")
         sendCoverMessage(msg, modId)
 
-def snapshotGui(file):
-   _vistle.snapshotGui(file)
+def snapshotGui(file, quitAfter = False):
+   _vistle.snapshotGui(file, quitAfter)
 
 class PythonStateObserver(_vistle.StateObserver):
     def __init__(self):
@@ -388,6 +395,8 @@ class PythonStateObserver(_vistle.StateObserver):
         super(PythonStateObserver, self).status(moduleId, text, prio)
     def updateStatus(self, moduleId, text, prio):
         super(PythonStateObserver, self).updateStatus(moduleId, text, prio)
+    def setName(self, moduleId, name):
+        super(PythonStateObserver, self).setName(moduleId, name)
 
 
 # re-export functions from _vistle
@@ -419,6 +428,8 @@ setStatus = _vistle.setStatus
 clearStatus = _vistle.clearStatus
 setLoadedFile = _vistle.setLoadedFile
 getLoadedFile = _vistle.getLoadedFile
+setModuleDisplayName = _vistle.setModuleDisplayName
+getModuleDisplayName = _vistle.getModuleDisplayName
 setParam = _vistle.setParam
 setIntParam = _vistle.setIntParam
 setFloatParam = _vistle.setFloatParam

@@ -41,7 +41,9 @@ ReadCsv::ReadCsv(const std::string &name, int moduleID, mpi::communicator comm):
         m_selectionParams[i + NUM_COORD_FIELDS] =
             addIntParameter("data_name_" + std::to_string(i),
                             "Name of data column outputted at data_out_" + std::to_string(i), 0, Parameter::Choice);
-        createOutputPort("data_out" + std::to_string(i), "data on points from column dataName" + std::to_string(i));
+        auto *p =
+            createOutputPort("data_out" + std::to_string(i), "data on points from column dataName" + std::to_string(i));
+        linkPortAndParameter(p, m_selectionParams[i + NUM_COORD_FIELDS]);
     }
 
     setParallelizationMode(ParallelizationMode::ParallelizeBlocks);
@@ -111,7 +113,9 @@ bool ReadCsv::examine(const Parameter *param)
         setParameterChoices(m_filename, files);
     }
     if (param == m_filename || param == nullptr) {
-        if (!m_layersInOneObject->getValue())
+        if (m_layersInOneObject->getValue() || m_filename->getValue() != 0) // 0 is all files
+            setPartitions(1);
+        else
             setPartitions(std::max(m_filename->choices().size() - 1, size_t(1)));
         std::fstream f(getFilename(m_directory->getValue(), std::max(vistle::Integer(0), m_filename->getValue() - 1)));
         if (!f.is_open()) {
@@ -125,7 +129,7 @@ bool ReadCsv::examine(const Parameter *param)
             std::getline(f, line);
         }
         m_delimiter = determineDelimiter(line);
-        m_choices = std::vector<std::string>{"NONE"};
+        m_choices = std::vector<std::string>{vistle::Reader::InvalidChoice};
         splitLine(m_choices, line, m_delimiter);
         auto lowerChoices = m_choices;
         std::transform(lowerChoices.begin(), lowerChoices.end(), lowerChoices.begin(), [](std::string s) {
@@ -146,7 +150,7 @@ bool ReadCsv::examine(const Parameter *param)
         }
     }
     if (param == m_layersInOneObject) {
-        if (m_layersInOneObject->getValue()) {
+        if (m_layersInOneObject->getValue() || m_filename->getValue() != 0) { // 0 is all files
             setPartitions(1);
         } else {
             setPartitions(std::max(m_filename->choices().size() - 1, size_t(1)));
@@ -253,7 +257,8 @@ bool ReadCsv::readFile(Token &token, int timestep, int block)
     if (block < 0 && !m_layersInOneObject->getValue()) {
         return true;
     }
-    sendInfo("Reading block %d, %s", block, getFilename(m_directory->getValue(), block).c_str());
+    auto layer = m_filename->getValue() > 0 ? m_filename->getValue() - 1 : block;
+    sendInfo("Reading block %d, %s", block, getFilename(m_directory->getValue(), layer).c_str());
     vistle::Points::ptr points = std::make_shared<vistle::Points>((size_t)0);
 
     std::array<vistle::Vec<Scalar>::ptr, NUM_DATA_FIELDS> dataObjects;
@@ -267,7 +272,7 @@ bool ReadCsv::readFile(Token &token, int timestep, int block)
             readLayer<Delimiter>(i, points, dataObjects);
         }
     } else {
-        readLayer<Delimiter>(block, points, dataObjects);
+        readLayer<Delimiter>(layer, points, dataObjects);
     }
     points->setBlock(block);
     points->setTimestep(timestep);
@@ -281,7 +286,7 @@ bool ReadCsv::readFile(Token &token, int timestep, int block)
             dataObjects[i]->setBlock(block);
             dataObjects[i]->setTimestep(timestep);
 
-            dataObjects[i]->addAttribute("_species", m_choices[getDataSelection(i)]);
+            dataObjects[i]->addAttribute(attribute::Species, m_choices[getDataSelection(i)]);
             token.applyMeta(dataObjects[i]);
             token.addObject("data_out" + std::to_string(i), dataObjects[i]);
         }

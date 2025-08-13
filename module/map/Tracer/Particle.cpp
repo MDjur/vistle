@@ -12,8 +12,9 @@
 
 using namespace vistle;
 
-Particle::Particle(Index id, int rank, Index startId, const Vector3 &pos, bool forward, GlobalData &global,
-                   Index timestep)
+template<class S>
+Particle<S>::Particle(Index id, int rank, Index startId, const Vector3 &pos, bool forward, GlobalData &global,
+                      Index timestep)
 : m_global(global)
 , m_id(id)
 , m_startId(startId)
@@ -22,11 +23,10 @@ Particle::Particle(Index id, int rank, Index startId, const Vector3 &pos, bool f
 , m_progress(false)
 , m_tracing(false)
 , m_forward(forward)
-, m_x(pos)
-, m_xold(pos)
+, m_x(VI(pos))
+, m_xold(VI(pos))
 , m_v(Vector3(std::numeric_limits<Scalar>::max(), 0, 0))
 // keep large enough so that particle moves initially
-, m_p(0)
 , m_stp(0)
 , m_time(0)
 , m_dist(0)
@@ -39,37 +39,44 @@ Particle::Particle(Index id, int rank, Index startId, const Vector3 &pos, bool f
 , m_stopReason(StillActive)
 , m_useCelltree(m_global.use_celltree)
 {
+    m_scalars.resize(global.numScalars);
     m_integrator.enableCelltree(m_useCelltree);
 
     if (!global.blocks[timestep].empty())
         m_time = global.blocks[timestep][0]->m_grid->getRealTime();
 }
 
-Particle::~Particle()
+template<class S>
+Particle<S>::~Particle()
 {}
 
-Index Particle::id() const
+template<class S>
+Index Particle<S>::id() const
 {
     return m_id;
 }
 
-int Particle::rank()
+template<class S>
+int Particle<S>::rank()
 {
     return m_rank;
 }
 
-Particle::StopReason Particle::stopReason() const
+template<class S>
+StopReason Particle<S>::stopReason() const
 {
     return m_stopReason;
 }
 
-void Particle::enableCelltree(bool value)
+template<class S>
+void Particle<S>::enableCelltree(bool value)
 {
     m_useCelltree = value;
     m_integrator.enableCelltree(value);
 }
 
-int Particle::searchRank(boost::mpi::communicator mpi_comm)
+template<class S>
+int Particle<S>::searchRank(boost::mpi::communicator mpi_comm)
 {
     assert(!m_tracing);
     assert(!m_currentSegment);
@@ -90,7 +97,8 @@ int Particle::searchRank(boost::mpi::communicator mpi_comm)
     return rank;
 }
 
-void Particle::startTracing()
+template<class S>
+void Particle<S>::startTracing()
 {
     assert(inGrid());
     m_tracing = true;
@@ -102,17 +110,20 @@ void Particle::startTracing()
     });
 }
 
-bool Particle::isActive() const
+template<class S>
+bool Particle<S>::isActive() const
 {
     return m_ingrid && (m_tracing || m_progress || m_block);
 }
 
-bool Particle::inGrid() const
+template<class S>
+bool Particle<S>::inGrid() const
 {
     return m_ingrid;
 }
 
-bool Particle::isMoving()
+template<class S>
+bool Particle<S>::isMoving()
 {
     if (!m_ingrid) {
         return false;
@@ -136,12 +147,14 @@ bool Particle::isMoving()
     return true;
 }
 
-bool Particle::isForward() const
+template<class S>
+bool Particle<S>::isForward() const
 {
     return m_forward;
 }
 
-bool Particle::findCell(double time)
+template<class S>
+bool Particle<S>::findCell(double time)
 {
     if (!m_ingrid) {
         return false;
@@ -152,14 +165,14 @@ bool Particle::findCell(double time)
         if (m_global.int_mode == ConstantVelocity) {
             const auto neigh = grid->getNeighborElements(m_el);
             for (auto el: neigh) {
-                if (grid->inside(el, m_x)) {
+                if (grid->inside(el, VV(m_x))) {
                     m_el = el;
                     assert(m_currentSegment);
                     return true;
                 }
             }
         } else {
-            m_el = grid->findCell(m_x, m_el, m_useCelltree ? GridInterface::NoFlags : GridInterface::NoCelltree);
+            m_el = grid->findCell(VV(m_x), m_el, m_useCelltree ? GridInterface::NoFlags : GridInterface::NoCelltree);
         }
         if (m_el != InvalidIndex) {
             assert(m_currentSegment);
@@ -174,7 +187,7 @@ bool Particle::findCell(double time)
             continue;
         }
         auto grid = block->getGrid();
-        m_el = grid->findCell(transformPoint(block->invTransform(), m_x), InvalidIndex,
+        m_el = grid->findCell(transformPoint(block->invTransform(), VV(m_x)), InvalidIndex,
                               m_useCelltree ? GridInterface::NoFlags : GridInterface::NoCelltree);
         if (m_el != InvalidIndex) {
             if (!m_currentSegment) {
@@ -183,6 +196,7 @@ bool Particle::findCell(double time)
                 m_currentSegment->m_startStep = m_stp;
                 m_currentSegment->m_num = m_segment;
                 m_currentSegment->m_blockIndex = block->m_grid->getBlock();
+                m_currentSegment->m_scalars.resize(m_global.numScalars);
                 if (m_forward)
                     ++m_segment;
                 else
@@ -199,15 +213,19 @@ bool Particle::findCell(double time)
     return false;
 }
 
-void Particle::EmitData()
+template<class S>
+void Particle<S>::EmitData()
 {
-    m_currentSegment->m_xhist.push_back(transformPoint(m_block->transform(), m_xold));
+    m_currentSegment->m_xhist.push_back(transformPoint(m_block->transform(), VV(m_xold)));
     m_currentSegment->m_vhist.push_back(m_block->velocityTransform() * m_v);
     m_currentSegment->m_times.push_back(m_time);
     if (m_global.computeStep)
         m_currentSegment->m_steps.push_back(m_stp);
-    if (m_global.computeScalar)
-        m_currentSegment->m_pressures.push_back(m_p); // will be ignored later on
+    assert(m_global.numScalars == m_scalars.size());
+    assert(m_currentSegment->m_scalars.size() == m_scalars.size());
+    for (int i = 0; i < m_scalars.size(); ++i) {
+        m_currentSegment->m_scalars[i].push_back(m_scalars[i]);
+    }
     if (m_global.computeStepWidth)
         m_currentSegment->m_stepWidth.push_back(m_integrator.h());
     if (m_global.computeDist)
@@ -222,7 +240,8 @@ void Particle::EmitData()
     }
 }
 
-void Particle::Deactivate(StopReason reason)
+template<class S>
+void Particle<S>::Deactivate(StopReason reason)
 {
     if (m_stopReason == StillActive)
         m_stopReason = reason;
@@ -230,17 +249,26 @@ void Particle::Deactivate(StopReason reason)
     m_ingrid = false;
 }
 
-bool Particle::Step()
+template<class S>
+bool Particle<S>::Step()
 {
     const auto &grid = m_block->getGrid();
-    auto inter = grid->getInterpolator(m_el, m_x, m_block->m_vecmap);
+    auto inter = grid->getInterpolator(m_el, VV(m_x), m_block->m_vecmap);
     m_v = inter(m_block->m_vx, m_block->m_vy, m_block->m_vz);
-    if (m_block->m_p) {
-        if (m_block->m_scamap != m_block->m_vecmap)
-            inter = grid->getInterpolator(m_el, m_x, m_block->m_scamap);
-        m_p = inter(m_block->m_p);
+    GridInterface::Interpolator otherInter;
+    bool haveOtherInter = false;
+    for (int i = 0; i < m_block->m_scal.size(); ++i) {
+        if (m_block->m_scalmap[i] == m_block->m_vecmap) {
+            m_scalars[i] = inter(m_block->m_scal[i]);
+        } else {
+            if (!haveOtherInter) {
+                haveOtherInter = true;
+                otherInter = grid->getInterpolator(m_el, VV(m_x), m_block->m_scalmap[i]);
+            }
+            m_scalars[i] = otherInter(m_block->m_scal[i]);
+        }
     }
-    Scalar ddist = (m_x - m_xold).norm();
+    Scal ddist = (m_x - m_xold).norm();
     m_xold = m_x;
 
     EmitData();
@@ -258,7 +286,8 @@ bool Particle::Step()
     return ret;
 }
 
-bool Particle::isTracing(bool wait)
+template<class S>
+bool Particle<S>::isTracing(bool wait)
 {
     if (!m_tracing) {
         return false;
@@ -284,7 +313,8 @@ bool Particle::isTracing(bool wait)
     return false;
 }
 
-bool Particle::madeProgress() const
+template<class S>
+bool Particle<S>::madeProgress() const
 {
     assert(!m_tracing);
     if (m_progress && !m_currentSegment) {
@@ -293,7 +323,8 @@ bool Particle::madeProgress() const
     return m_progress;
 }
 
-bool Particle::trace()
+template<class S>
+bool Particle<S>::trace()
 {
     assert(m_tracing);
 
@@ -306,7 +337,8 @@ bool Particle::trace()
     return traced;
 }
 
-void Particle::finishSegment()
+template<class S>
+void Particle<S>::finishSegment()
 {
     if (m_currentSegment) {
         m_currentSegment->simplify(m_global.simplification_error);
@@ -316,7 +348,8 @@ void Particle::finishSegment()
     UpdateBlock(nullptr);
 }
 
-void Particle::fetchSegments(Particle &other)
+template<class S>
+void Particle<S>::fetchSegments(Particle &other)
 {
     assert(m_rank == other.m_rank);
     assert(!m_currentSegment);
@@ -340,7 +373,8 @@ inline Scalar interp(Scalar f, const Scalar f0, const Scalar f1)
     return clamp(d0 / diff, Scalar(0), Scalar(1));
 }
 
-void Particle::addToOutput()
+template<class S>
+void Particle<S>::addToOutput()
 {
     const bool second_order = true;
 
@@ -378,7 +412,7 @@ void Particle::addToOutput()
                     const auto pos0 = prevSeg->m_xhist[prevIdx];
                     Vector3 pos;
                     if (second_order) {
-                        Scalar dt0 = time - prevTime, dt1 = nextTime - time;
+                        Scal dt0 = time - prevTime, dt1 = nextTime - time;
                         const Vector3 pos0p = pos0 + dt0 * vel0;
                         const Vector3 pos1p = pos1 - dt1 * vel1;
                         pos = lerp(pos0p, pos1p, t);
@@ -400,11 +434,28 @@ void Particle::addToOutput()
                         vout->z().push_back(vel[2]);
                     }
 
-                    if (m_global.computeScalar) {
-                        const auto pres1 = seg.m_pressures[i];
-                        const auto pres0 = prevSeg->m_pressures[prevIdx];
-                        Scalar pres = lerp(pres0, pres1, t);
-                        m_global.scalField[timestep]->x().push_back(pres);
+                    if (m_global.numScalars > 0) {
+                        std::vector<shm<Scalar>::array *> scalars;
+                        scalars.reserve(m_global.numScalars);
+                        for (int p = 1; p < Tracer::NumPorts; ++p) {
+                            if (!m_global.computeField[p])
+                                continue;
+                            auto &f = m_global.fields[p][timestep];
+                            if (auto vec = Vec<Scalar, 3>::as(f)) {
+                                scalars.push_back(&vec->x());
+                                scalars.push_back(&vec->y());
+                                scalars.push_back(&vec->z());
+                            } else if (auto scal = Vec<Scalar>::as(f)) {
+                                scalars.push_back(&scal->x());
+                            }
+                        }
+                        assert(scalars.size() == m_global.numScalars);
+                        for (int s = 0; s < m_global.numScalars; ++s) {
+                            const auto &scalars1 = seg.m_scalars[s];
+                            const auto &scalars0 = prevSeg->m_scalars[s];
+                            Scalar scal = lerp(scalars0[i], scalars1[i], t);
+                            scalars[s]->push_back(scal);
+                        }
                     }
 
                     if (m_global.computeDist) {
@@ -468,10 +519,26 @@ void Particle::addToOutput()
             vec_y->reserve(nsz);
             vec_z->reserve(nsz);
         }
-        shm<Scalar>::array *scal = nullptr;
-        if (m_global.computeScalar) {
-            scal = &m_global.scalField[t]->x();
-            scal->reserve(nsz);
+
+        std::vector<shm<Scalar>::array *> scalars;
+        if (m_global.numScalars > 0) {
+            scalars.reserve(m_global.numScalars);
+            for (int p = 1; p < Tracer::NumPorts; ++p) {
+                if (!m_global.computeField[p])
+                    continue;
+                auto &f = m_global.fields[p][t];
+                if (auto vec = Vec<Scalar, 3>::as(f)) {
+                    scalars.push_back(&vec->x());
+                    scalars.push_back(&vec->y());
+                    scalars.push_back(&vec->z());
+                } else if (auto scal = Vec<Scalar>::as(f)) {
+                    scalars.push_back(&scal->x());
+                }
+            }
+            assert(scalars.size() == m_global.numScalars);
+            for (int s = 0; s < m_global.numScalars; ++s) {
+                scalars[s]->reserve(nsz);
+            }
         }
         shm<Scalar>::array *stepwidth = nullptr;
         if (m_global.computeStepWidth) {
@@ -514,8 +581,8 @@ void Particle::addToOutput()
             blockIndex->reserve(nsz);
         }
 
-        auto addStep = [this, &x, &y, &z, &cl, vec_x, vec_y, vec_z, scal, id, step, stepwidth, time, dist, stopReason,
-                        cellIndex, blockIndex](const Segment &seg, Index i) {
+        auto addStep = [this, &x, &y, &z, &cl, vec_x, vec_y, vec_z, scalars, id, step, stepwidth, time, dist,
+                        stopReason, cellIndex, blockIndex](const Segment &seg, Index i) {
             const auto &vec = seg.m_xhist[i];
             x.push_back(vec[0]);
             y.push_back(vec[1]);
@@ -529,8 +596,9 @@ void Particle::addToOutput()
                 vec_y->push_back(vel[1]);
             if (vec_z)
                 vec_z->push_back(vel[2]);
-            if (scal)
-                scal->push_back(seg.m_pressures[i]);
+            for (int s = 0; s < m_global.numScalars; ++s) {
+                scalars[s]->push_back(seg.m_scalars[s][i]);
+            }
             if (stepwidth)
                 stepwidth->push_back(seg.m_stepWidth[i]);
             if (step)
@@ -573,13 +641,15 @@ void Particle::addToOutput()
     m_segments.clear();
 }
 
-Scalar Particle::time() const
+template<class S>
+Scalar Particle<S>::time() const
 {
     return m_time;
 }
 
 
-void Particle::broadcast(boost::mpi::communicator mpi_comm, int root)
+template<class S>
+void Particle<S>::broadcast(boost::mpi::communicator mpi_comm, int root)
 {
     boost::mpi::broadcast(mpi_comm, *this, root);
     m_integrator.m_hact = m_integrator.m_h;
@@ -590,7 +660,7 @@ namespace boost {
 namespace serialization {
 
 template<class Archive>
-void save(Archive &ar, const Particle::SegmentMap &segments, const unsigned int version)
+void save(Archive &ar, const SegmentMap &segments, const unsigned int version)
 {
     int numsegs = segments.size();
     ar &numsegs;
@@ -599,36 +669,39 @@ void save(Archive &ar, const Particle::SegmentMap &segments, const unsigned int 
 }
 
 template<class Archive>
-void load(Archive &ar, Particle::SegmentMap &segments, const unsigned int version)
+void load(Archive &ar, SegmentMap &segments, const unsigned int version)
 {
     int numsegs = 0;
     ar &numsegs;
     for (int i = 0; i < numsegs; ++i) {
-        Particle::Segment seg;
+        Segment seg;
         ar &seg;
-        segments.emplace(seg.m_num, std::make_shared<Particle::Segment>(std::move(seg)));
+        segments.emplace(seg.m_num, std::make_shared<Segment>(std::move(seg)));
     }
 }
 
 } // namespace serialization
 } // namespace boost
 
-BOOST_SERIALIZATION_SPLIT_FREE(Particle::SegmentMap)
+BOOST_SERIALIZATION_SPLIT_FREE(SegmentMap)
 
-void Particle::startSendData(boost::mpi::communicator mpi_comm)
+template<class S>
+void Particle<S>::startSendData(boost::mpi::communicator mpi_comm)
 {
     assert(rank() != mpi_comm.rank());
     m_requests.emplace_back(mpi_comm.isend(rank(), id(), m_segments));
 }
 
-void Particle::finishSendData()
+template<class S>
+void Particle<S>::finishSendData()
 {
     mpi::wait_all(m_requests.begin(), m_requests.end());
     m_requests.clear();
     m_segments.clear();
 }
 
-void Particle::receiveData(boost::mpi::communicator mpi_comm, int rank)
+template<class S>
+void Particle<S>::receiveData(boost::mpi::communicator mpi_comm, int rank)
 {
     SegmentMap segments;
     mpi_comm.recv(rank, id(), segments);
@@ -643,42 +716,45 @@ void Particle::receiveData(boost::mpi::communicator mpi_comm, int rank)
     }
 }
 
-void Particle::UpdateBlock(BlockData *block)
+template<class S>
+void Particle<S>::UpdateBlock(BlockData *block)
 {
     if (m_block) {
-        m_x = transformPoint(m_block->transform(), m_x);
-        m_xold = transformPoint(m_block->transform(), m_xold);
+        m_x = VI(transformPoint(m_block->transform(), VV(m_x)));
+        m_xold = VI(transformPoint(m_block->transform(), VV(m_xold)));
     }
 
     m_block = block;
 
     if (m_block) {
-        m_x = transformPoint(m_block->invTransform(), m_x);
-        m_xold = transformPoint(m_block->invTransform(), m_xold);
+        m_x = VI(transformPoint(m_block->invTransform(), VV(m_x)));
+        m_xold = VI(transformPoint(m_block->invTransform(), VV(m_xold)));
     }
 
     m_integrator.UpdateBlock();
 }
 
-template<typename S>
-static void skipVector(std::vector<S> &v, const std::vector<Index> &use)
+template<typename T>
+static void skipVector(std::vector<T> &v, const std::vector<Index> &use)
 {
     if (use.empty()) {
         v.clear();
         return;
     }
 
-    if (use.back() >= v.size())
+    if (use.back() >= v.size()) {
+        assert(v.empty());
         return;
+    }
 
-    std::vector<S> vv;
+    std::vector<T> vv;
     for (auto i: use) {
         vv.emplace_back(v[i]);
     }
     std::swap(v, vv);
 }
 
-Scalar Particle::Segment::cosAngle(Index i) const
+Scalar Segment::cosAngle(Index i) const
 {
     assert(i > 0);
     assert(i + 1 < m_xhist.size());
@@ -687,7 +763,7 @@ Scalar Particle::Segment::cosAngle(Index i) const
     return (x - x0).normalized().dot((x1 - x).normalized());
 }
 
-double Particle::Segment::interpolationError(Index i0, Index i1, Index i) const
+double Segment::interpolationError(Index i0, Index i1, Index i) const
 {
     assert(i0 < i);
     assert(i < i1);
@@ -718,13 +794,16 @@ double Particle::Segment::interpolationError(Index i0, Index i1, Index i) const
             err = e;
     }
 
-    if (m_pressures.size() == m_xhist.size()) {
-        auto p0 = m_pressures[i0], p1 = m_pressures[i1], p = m_pressures[i];
-        auto pi = lerp(p0, p1, t);
-        auto d = p - pi;
-        double e = std::abs(pi) > eps ? 1. : 0.;
-        if (std::abs(p) > eps)
-            e = std::abs(d / p);
+    for (int k = 0; k < m_scalars.size(); ++k) {
+        if (m_scalars[k].size() != m_xhist.size()) {
+            continue;
+        }
+        auto s0 = m_scalars[k][i0], s1 = m_scalars[k][i1], s = m_scalars[k][i];
+        auto si = lerp(s0, s1, t);
+        auto d = s - si;
+        double e = std::abs(si) > eps ? 1. : 0.;
+        if (std::abs(s) > eps)
+            e = std::abs(d / s);
         if (e > err)
             err = e;
     }
@@ -732,7 +811,7 @@ double Particle::Segment::interpolationError(Index i0, Index i1, Index i) const
     return err;
 }
 
-void Particle::Segment::simplify(double relerr)
+void Segment::simplify(double relerr)
 {
     // no error allowed
     if (relerr <= 0.)
@@ -785,10 +864,15 @@ void Particle::Segment::simplify(double relerr)
         skipVector(m_xhist, use);
         skipVector(m_vhist, use);
         skipVector(m_stepWidth, use);
-        skipVector(m_pressures, use);
+        for (int i = 0; i < m_scalars.size(); ++i) {
+            skipVector(m_scalars[i], use);
+        }
         skipVector(m_steps, use);
         skipVector(m_times, use);
         skipVector(m_dists, use);
         skipVector(m_cellIndex, use);
     }
 }
+
+template class Particle<float>;
+template class Particle<double>;

@@ -166,6 +166,11 @@ void VistleObserver::itemInfo(const std::string &text, vistle::message::ItemInfo
     emit itemInfo_s(QString::fromStdString(text), type, senderId, QString::fromStdString(port));
 }
 
+void VistleObserver::portState(vistle::message::ItemInfo::PortState state, int senderId, const std::string &port)
+{
+    emit portState_s(state, senderId, QString::fromStdString(port));
+}
+
 namespace {
 
 bool isHtml(const QString &text)
@@ -216,6 +221,11 @@ void VistleObserver::updateStatus(int id, const std::string &text, vistle::messa
 void VistleObserver::status(int id, const std::string &text, vistle::message::UpdateStatus::Importance priority)
 {
     emit moduleStatus_s(id, QString::fromStdString(text), priority);
+}
+
+void VistleObserver::setName(int moduleId, const std::string &name)
+{
+    emit setName_s(moduleId, QString::fromStdString(name));
 }
 
 void VistleObserver::quitRequested()

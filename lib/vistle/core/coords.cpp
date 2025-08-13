@@ -4,12 +4,22 @@
 
 #include "coords_impl.h"
 #include "validate.h"
+#include "shm_obj_ref_impl.h"
 
 namespace vistle {
 
 Coords::Coords(const size_t numVertices, const Meta &meta): Coords::Base(static_cast<Data *>(NULL))
 {
     refreshImpl();
+}
+
+DataBase::Mapping Coords::guessMapping(Object::const_ptr grid) const
+{
+    if (!grid || grid->getHandle() == getHandle()) {
+        return DataBase::Vertex;
+    }
+
+    return Base::guessMapping(grid);
 }
 
 void Coords::resetCoords()

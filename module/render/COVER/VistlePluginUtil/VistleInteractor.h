@@ -18,13 +18,16 @@ public:
     VistleInteractor(const vistle::MessageSender *sender, const std::string &moduleName, int moduleId);
     ~VistleInteractor();
     void setPluginName(const std::string &plugin);
+    void setDisplayName(const std::string &name);
+
+    const char *getModuleDisplayName() const override;
 
     void addParam(const std::string &name, const vistle::message::AddParameter &msg);
     void removeParam(const std::string &name, const vistle::message::RemoveParameter &msg);
     void applyParam(const std::string &name, const vistle::message::SetParameter &msg);
     bool hasParams() const;
 
-    /// returns true, if Interactor comes from same Module as intteractor i;
+    /// returns true, if Interactor comes from same Module as interactor i;
     bool isSameModule(coInteractor *i) const override;
 
     /// returns true, if Interactor is exactly the same as interactor i;
@@ -125,6 +128,7 @@ public:
 private:
     const vistle::MessageSender *m_sender;
     std::string m_moduleName;
+    std::string m_moduleDisplayName;
     std::string m_pluginName;
     std::string m_hubName;
     int m_moduleId;

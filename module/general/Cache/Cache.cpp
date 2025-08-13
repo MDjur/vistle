@@ -1,3 +1,5 @@
+#include <string>
+
 #include <vistle/module/module.h>
 
 #include <vistle/core/archive_saver.h>
@@ -42,6 +44,8 @@ private:
     FloatParameter *m_zfpRate = nullptr;
     IntParameter *m_zfpPrecision = nullptr;
     FloatParameter *m_zfpAccuracy = nullptr;
+    IntParameter *m_bigWhoopNPar = nullptr;
+    FloatParameter *m_bigWhoopRate = nullptr;
     IntParameter *m_archiveCompression = nullptr;
     IntParameter *m_archiveCompressionSpeed = nullptr;
 
@@ -88,6 +92,12 @@ Cache::Cache(const std::string &name, int moduleID, mpi::communicator comm): Mod
     setParameterRange(m_zfpPrecision, Integer(1), Integer(64));
     m_zfpAccuracy = addFloatParameter("zfp_accuracy", "ZFP compression error tolerance", 1e-10);
     setParameterRange(m_zfpAccuracy, Float(0.), Float(1e10));
+
+    m_bigWhoopNPar = addIntParameter("bigWhoop_nPar", "BigWhoop number of independent parameters", 1);
+    setParameterRange(m_bigWhoopNPar, Integer(1), Integer(std::numeric_limits<uint8_t>::max()));
+    m_bigWhoopRate = addFloatParameter("bigWhoop_rate", "BigWhoop compression rate", 1.);
+    setParameterMinimum(m_bigWhoopRate, Float(0.));
+
     m_archiveCompression = addIntParameter("archive_compression", "compression mode for archives",
                                            message::CompressionZstd, Parameter::Choice);
     V_ENUM_SET_CHOICES(m_archiveCompression, message::CompressionMode);
@@ -119,7 +129,9 @@ bool Cache::compute()
 {
     if (m_fromDisk) {
         for (int i = 0; i < NumPorts; ++i) {
-            accept<Object>(m_inPort[i]);
+            if (!isConnected(*m_inPort[i]))
+                continue;
+            expect<Object>(m_inPort[i]);
         }
         return true;
     }
@@ -178,6 +190,8 @@ bool Cache::prepare()
     m_compressionSettings.zfpRate = m_zfpRate->getValue();
     m_compressionSettings.zfpAccuracy = m_zfpAccuracy->getValue();
     m_compressionSettings.zfpPrecision = m_zfpPrecision->getValue();
+    m_compressionSettings.bigWhoopNPar = m_bigWhoopNPar->getValue();
+    m_compressionSettings.bigWhoopRate = std::to_string(m_bigWhoopRate->getValue());
 
     std::string file = p_file->getValue();
 
@@ -198,13 +212,31 @@ bool Cache::prepare()
     file += ".";
     file += std::to_string(rank());
     file += ".vsld";
+
     m_file = file;
+
+    auto checkFd = [&]() {
+        int errorfd = mpi::all_reduce(comm(), m_fd, mpi::minimum<int>());
+        if (errorfd == -1) {
+            if (m_fd >= 0)
+                close(m_fd);
+            m_fd = -1;
+            return false;
+        }
+        return true;
+    };
 
     if (m_toDisk) {
         m_saver.reset(new DeepArchiveSaver);
         m_saver->setCompressionSettings(m_compressionSettings);
         m_fd = open(m_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_BINARY,
                     S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+        if (m_fd == -1) {
+            sendError("Could not open %s for writing: %s", m_file.c_str(), strerror(errno));
+        }
+        if (!checkFd()) {
+            m_toDisk = false;
+        }
         return true;
     }
 
@@ -220,14 +252,10 @@ bool Cache::prepare()
 
     m_fd = open(m_file.c_str(), O_RDONLY | O_BINARY);
     if (m_fd == -1) {
-        sendError("Could not open %s: %s", m_file.c_str(), strerror(errno));
+        sendError("Could not open %s for reading: %s", m_file.c_str(), strerror(errno));
     }
-    int errorfd = mpi::all_reduce(comm(), m_fd, mpi::minimum<int>());
-    if (errorfd == -1) {
-        m_toDisk = false;
-        if (m_fd >= 0)
-            close(m_fd);
-        m_fd = -1;
+    if (!checkFd()) {
+        m_fromDisk = false;
         return true;
     }
 
@@ -237,11 +265,8 @@ bool Cache::prepare()
     std::map<std::string, buffer> objects, arrays;
     std::map<std::string, message::CompressionMode> compression;
     std::map<std::string, size_t> size;
-    std::map<std::string, std::string> objectTranslations, arrayTranslations;
     auto fetcher = std::make_shared<DeepArchiveFetcher>(objects, arrays, compression, size);
     fetcher->setRenameObjects(true);
-    fetcher->setObjectTranslations(objectTranslations);
-    fetcher->setArrayTranslations(arrayTranslations);
     bool ok = true;
     int numObjects = 0;
     int numTime = 0;
@@ -290,17 +315,23 @@ bool Cache::prepare()
         const auto &buf = comp == message::CompressionNone ? objbuf : raw;
         vecistreambuf<buffer> membuf(buf);
         vistle::iarchive memar(membuf);
-        memar.setFetcher(fetcher);
-        //std::cerr << "output to port " << port << ", trying to load " << name0 << std::endl;
-        Object::ptr obj(Object::loadObject(memar));
-        updateMeta(obj);
-        renumberObject(obj);
-        for (auto &o: obj->referencedObjects()) {
-            renumberObject(std::const_pointer_cast<Object>(o));
+        try {
+            memar.setFetcher(fetcher);
+            //std::cerr << "output to port " << port << ", trying to load " << name0 << std::endl;
+            Object::ptr obj(Object::loadObject(memar));
+            updateMeta(obj);
+            renumberObject(obj);
+            for (auto &o: obj->referencedObjects()) {
+                renumberObject(std::const_pointer_cast<Object>(o));
+            }
+            //std::cerr << "restored object on port " << port << ": " << *obj << std::endl;
+            addObject(m_outPort[port], obj);
+            fetcher->releaseArrays();
+        } catch (const std::exception &ex) {
+            std::cerr << "failed to load object " << name0 << ": " << ex.what() << std::endl;
+            throw ex;
+            return;
         }
-        //std::cerr << "restored object on port " << port << ": " << *obj << std::endl;
-        passThroughObject(m_outPort[port], obj);
-        fetcher->releaseArrays();
     };
 
     std::string objectToRestore;
@@ -424,8 +455,6 @@ bool Cache::prepare()
     }
 
     sendInfo("restored %d objects", numObjects);
-    objectTranslations = fetcher->objectTranslations();
-    arrayTranslations = fetcher->arrayTranslations();
 
     close(m_fd);
     m_fd = -1;

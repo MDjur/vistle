@@ -57,6 +57,8 @@ public:
     Module *newModule(QString modName);
     Module *findModule(int id) const;
     Module *findModule(const boost::uuids::uuid &spawnUuid) const;
+    Module *findModule(const QPointF &pos) const;
+    QList<QString> getModuleParameters(int id) const;
 
     bool moveModule(int moduleId, float x, float y);
 
@@ -76,6 +78,7 @@ public:
 
 signals:
     void toggleOutputStreaming(int moduleId, bool enable);
+    void highlightModule(int moduleId);
 
 public slots:
     void addModule(int moduleId, const boost::uuids::uuid &spawnUuid, QString name);
@@ -87,6 +90,8 @@ public slots:
     void deleteConnection(int fromId, QString fromName, int toId, QString toName);
     void moduleStatus(int id, QString status, int prio);
     void itemInfoChanged(QString text, int type, int id, QString port);
+    void portStateChanged(int state, int id, QString port);
+    void setDisplayName(int id, QString name);
     void moduleMessage(int senderId, int type, QString message);
     void clearMessages(int moduleId);
     void messagesVisibilityChanged(int moduleId, bool visible);

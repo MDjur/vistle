@@ -95,8 +95,8 @@ public:
     template<class Type>
     typename Type::const_ptr expect(const std::string &port);
 
-    void addObject(Port *port, Object::ptr obj);
-    void addObject(const std::string &port, Object::ptr obj);
+    void addObject(Port *port, Object::const_ptr obj);
+    void addObject(const std::string &port, Object::const_ptr obj);
 
 protected:
     void addDependency(std::shared_ptr<BlockTask> dep);
@@ -111,7 +111,7 @@ protected:
     std::set<Port *> m_ports;
     std::map<std::string, Port *> m_portsByString;
     std::set<std::shared_ptr<BlockTask>> m_dependencies;
-    std::map<Port *, std::deque<Object::ptr>> m_objects;
+    std::map<Port *, std::deque<Object::const_ptr>> m_objects;
 
     std::mutex m_mutex;
     std::shared_future<bool> m_future;
@@ -131,7 +131,7 @@ public:
     const StateTracker &state() const;
     StateTracker &state();
     virtual void eventLoop(); // called from MODULE_MAIN
-    void initDone(); // to be called from eventLoop after module ctor has run
+    virtual void initDone(); // to be called from eventLoop after module ctor has run
 
     config::Access *configAccess() const;
     config::File *config() const;
@@ -155,9 +155,13 @@ public:
     ObjectCache::CacheMode cacheMode() const;
 
     Port *createInputPort(const std::string &name, const std::string &description, const int flags = 0);
-    Port *createOutputPort(const std::string &name, const std::string &descriptio, const int flags = 0);
+    Port *createOutputPort(const std::string &name, const std::string &description, const int flags = 0);
     bool destroyPort(const std::string &portName);
     bool destroyPort(const Port *port);
+    bool setPortState(const Port *port, message::ItemInfo::PortState state);
+    bool linkPorts(const Port *input, const Port *output); //< make output depend on input
+    void setPortOptional(const Port *port,
+                         bool optional = true); //< set port as optional, i.e. module can run without it being connected
 
     bool sendObject(const mpi::communicator &comm, vistle::Object::const_ptr object, int destRank) const;
     bool sendObject(vistle::Object::const_ptr object, int destRank) const;
@@ -171,8 +175,8 @@ public:
     bool broadcastObjectViaShm(const mpi::communicator &comm, vistle::Object::const_ptr &object,
                                const std::string &objName, int root) const;
 
-    bool addObject(Port *port, vistle::Object::ptr object);
-    bool addObject(const std::string &portName, vistle::Object::ptr object);
+    bool addObject(Port *port, vistle::Object::const_ptr object);
+    bool addObject(const std::string &portName, vistle::Object::const_ptr object);
 
     ObjectList getObjects(const std::string &portName);
     bool hasObject(const Port *port) const;
@@ -273,9 +277,6 @@ public:
     void updateMeta(vistle::Object::ptr object) const;
 
 protected:
-    bool passThroughObject(Port *port, vistle::Object::const_ptr object);
-    bool passThroughObject(const std::string &portName, vistle::Object::const_ptr object);
-
     virtual void setInputSpecies(const std::string &species); //< _species attribute on input has changed
 
     void setObjectReceivePolicy(int pol);
@@ -365,6 +366,8 @@ private:
 
     std::map<std::string, Port> outputPorts;
     std::map<std::string, Port> inputPorts;
+    std::map<std::string, int> m_portNumber;
+    int m_portCounter = 0;
 
     ObjectCache m_cache;
     ObjectCache::CacheMode m_defaultCacheMode;
@@ -412,7 +415,12 @@ private:
         }
     };
     std::map<InfoKey, std::string> m_currentItemInfo;
+    std::map<InfoKey, message::ItemInfo::PortState> m_currentPortState;
     std::string m_inputSpecies;
+    int m_inputSpeciesPort = -1;
+    std::map<const Port *, std::set<const Port *>> m_inPortDependents, m_outPortDependencies;
+    bool updateLinkedPorts(const Port *port);
+    std::map<const Port *, message::ItemInfo::PortState> m_portState;
 
 #ifdef NDEBUG
     int m_validateObjects = 0; // Disable

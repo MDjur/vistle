@@ -22,10 +22,14 @@ using namespace vistle;
 
 Thicken::Thicken(const std::string &name, int moduleID, mpi::communicator comm): Module(name, moduleID, comm)
 {
-    createInputPort("grid_in", "lines or points with scalar data for radius");
-    createInputPort("data_in", "mapped data");
-    createOutputPort("grid_out", "tubes or spheres");
-    createOutputPort("data_out", "tubes or spheres with mapped data");
+    auto gin = createInputPort("grid_in", "lines or points with scalar data for radius");
+    auto din = createInputPort("data_in", "mapped data");
+    auto gout = createOutputPort("grid_out", "tubes or spheres");
+    auto dout = createOutputPort("data_out", "tubes or spheres with mapped data");
+    linkPorts(gin, gout);
+    linkPorts(gin, dout);
+    linkPorts(din, dout);
+    setPortOptional(din, true);
 
     m_radius = addFloatParameter("radius", "radius or radius scale factor of tube/sphere", 1.);
     setParameterMinimum(m_radius, (Float)0.);
@@ -153,7 +157,7 @@ bool Thicken::compute()
         spheres = points->clone();
         numRad = spheres->getNumCoords();
         cwr = spheres;
-        spheres->addAttribute("_approximate_depth", m_correctDepth->getValue() ? "false" : "true");
+        spheres->addAttribute(attribute::ApproximateDepth, m_correctDepth->getValue() ? "false" : "true");
     }
 
     assert(cwr);

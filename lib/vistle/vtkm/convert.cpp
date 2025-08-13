@@ -1,7 +1,7 @@
 #include "convert.h"
 #include "convert_topology.h"
 
-#include <vtkm/cont/ArrayHandleExtractComponent.h>
+#include <viskores/cont/ArrayHandleExtractComponent.h>
 
 #include <vistle/core/scalars.h>
 #include <vistle/core/uniformgrid.h>
@@ -13,6 +13,7 @@
 #include <vistle/core/indexed.h>
 
 #include <vistle/core/shm_array_impl.h>
+#include <vistle/core/shm_obj_ref_impl.h>
 
 #include <boost/mpl/for_each.hpp>
 
@@ -21,7 +22,7 @@ namespace vistle {
 
 namespace {
 
-VtkmTransformStatus vtkmApplyGhost(vtkm::cont::DataSet &vtkmDataset, Object::const_ptr &grid)
+ModuleStatusPtr vtkmApplyGhost(viskores::cont::DataSet &vtkmDataset, Object::const_ptr &grid)
 {
     const std::string &ghostname = "ghost";
     vtkmDataset.SetGhostCellFieldName(ghostname);
@@ -42,41 +43,40 @@ VtkmTransformStatus vtkmApplyGhost(vtkm::cont::DataSet &vtkmDataset, Object::con
             vtkmDataset.SetGhostCellField(ghostname, ghost);
         }
     }
-    return VtkmTransformStatus::SUCCESS;
+    return Success();
 }
 
-VtkmTransformStatus vtkmGetGhosts(const vtkm::cont::DataSet &dataset, Object::ptr &result)
+ModuleStatusPtr vtkmGetGhosts(const viskores::cont::DataSet &dataset, Object::ptr &result)
 {
     if (!dataset.HasGhostCellField())
-        return VtkmTransformStatus::SUCCESS;
+        return Success();
 
     auto ghostname = dataset.GetGhostCellFieldName();
     std::cerr << "vtkm: has ghost cells: " << ghostname << std::endl;
-    if (auto ghosts = vtkmGetField(dataset, ghostname)) {
+    if (auto ghosts = vtkmGetField(dataset, ghostname, DataBase::Element)) {
         std::cerr << "vtkm: got ghost cells: #" << ghosts->getSize() << std::endl;
         if (auto bvec = vistle::Vec<vistle::Byte>::as(ghosts)) {
             if (auto indexed = Indexed::as(result)) {
                 indexed->d()->ghost = bvec->d()->x[0];
-                return VtkmTransformStatus::SUCCESS;
+                return Success();
             } else if (auto tri = Triangles::as(result)) {
                 tri->d()->ghost = bvec->d()->x[0];
-                return VtkmTransformStatus::SUCCESS;
+                return Success();
             } else if (auto quad = Quads::as(result)) {
                 quad->d()->ghost = bvec->d()->x[0];
-                return VtkmTransformStatus::SUCCESS;
+                return Success();
             }
 
-            std::cerr << "cannot apply ghosts" << std::endl;
-            return VtkmTransformStatus::UNSUPPORTED_CELL_TYPE;
+            return Error("Cannot apply VTKm ghost field to Vistle grid: only supported for Indexed, Triangles, and "
+                         "Quads grids.");
         }
-        std::cerr << "cannot convert ghosts" << std::endl;
-        return VtkmTransformStatus::UNSUPPORTED_FIELD_TYPE;
+        return Error("The converted ghost field is not of type Byte.");
     }
-    std::cerr << "did not find ghosts" << std::endl;
-    return VtkmTransformStatus::OTHER_ERROR;
+    return Error(
+        "An error occurred while converting VTKm ghost field to Vistle grid. Check logfile for more information.");
 }
 
-VtkmTransformStatus vtkmApplyRadius(vtkm::cont::DataSet &vtkmDataset, Object::const_ptr &grid)
+ModuleStatusPtr vtkmApplyRadius(viskores::cont::DataSet &vtkmDataset, Object::const_ptr &grid)
 {
     vistle::Vec<Scalar>::const_ptr radius;
     if (auto lines = Lines::as(grid)) {
@@ -87,19 +87,18 @@ VtkmTransformStatus vtkmApplyRadius(vtkm::cont::DataSet &vtkmDataset, Object::co
     if (radius) {
         return vtkmAddField(vtkmDataset, radius, "_radius");
     }
-    return VtkmTransformStatus::SUCCESS;
+    return Success();
 }
 
-VtkmTransformStatus vtkmGetRadius(const vtkm::cont::DataSet &dataset, Object::ptr &result)
+ModuleStatusPtr vtkmGetRadius(const viskores::cont::DataSet &dataset, Object::ptr &result)
 {
     auto radius = vtkmGetField(dataset, "_radius");
     if (!radius) {
-        return VtkmTransformStatus::SUCCESS;
+        return Success();
     }
     auto rvec = vistle::Vec<vistle::Scalar>::as(radius);
     if (!rvec) {
-        std::cerr << "unsupported field type for radius" << std::endl;
-        return VtkmTransformStatus::UNSUPPORTED_FIELD_TYPE;
+        return Error("Radius must be a scalar field.");
     }
 
     auto r = std::make_shared<vistle::Vec<Scalar>>(0);
@@ -107,46 +106,47 @@ VtkmTransformStatus vtkmGetRadius(const vtkm::cont::DataSet &dataset, Object::pt
     // don't use setRadius() in order to bypass check() on object before updateMeta()
     if (auto lines = Lines::as(result)) {
         lines->d()->radius = r;
-        return VtkmTransformStatus::SUCCESS;
+        return Success();
     } else if (auto points = Points::as(result)) {
         points->d()->radius = r;
-        return VtkmTransformStatus::SUCCESS;
+        return Success();
     }
 
-    std::cerr << "cannot apply radius to anything but Points and Lines" << std::endl;
-    return VtkmTransformStatus::UNSUPPORTED_GRID_TYPE;
+    return Error("Radius can only be applied to Points and Lines.");
 }
 
-VtkmTransformStatus vtkmApplyNormals(vtkm::cont::DataSet &vtkmDataset, Object::const_ptr &grid)
+ModuleStatusPtr vtkmApplyNormals(viskores::cont::DataSet &vtkmDataset, Object::const_ptr &grid)
 {
     auto coords = Coords::as(grid);
     if (!coords) {
-        return VtkmTransformStatus::SUCCESS;
+        return Success();
     }
 
     auto normals = coords->normals();
     if (!normals) {
-        return VtkmTransformStatus::SUCCESS;
+        return Success();
     }
 
     auto mapping = normals->guessMapping(coords);
     return vtkmAddField(vtkmDataset, normals, "normals", mapping);
 }
 
-VtkmTransformStatus vtkmGetNormals(const vtkm::cont::DataSet &dataset, Object::ptr &result)
+ModuleStatusPtr vtkmGetNormals(const viskores::cont::DataSet &dataset, Object::ptr &result)
 {
     auto normals = vtkmGetField(dataset, "normals");
     if (!normals) {
-        return VtkmTransformStatus::SUCCESS;
+        normals = vtkmGetField(dataset, "Normals");
+    }
+    if (!normals) {
+        return Success();
     }
     auto nvec = vistle::Vec<vistle::Scalar, 3>::as(normals);
     if (!nvec) {
-        std::cerr << "cannot convert normals" << std::endl;
-        return VtkmTransformStatus::UNSUPPORTED_FIELD_TYPE;
+        return Error("Normals must be a 3D vector field.");
     }
     auto coords = Coords::as(result);
     if (!coords) {
-        return VtkmTransformStatus::UNSUPPORTED_GRID_TYPE;
+        return Error("Normals can only be applied to grids with coordinates.");
     }
 
     auto n = std::make_shared<vistle::Normals>(0);
@@ -156,17 +156,17 @@ VtkmTransformStatus vtkmGetNormals(const vtkm::cont::DataSet &dataset, Object::p
     // don't use setNormals() in order to bypass check() on object before updateMeta()
     coords->d()->normals = n;
 
-    return VtkmTransformStatus::SUCCESS;
+    return Success();
 }
 
 } // namespace
 
-VtkmTransformStatus vtkmSetGrid(vtkm::cont::DataSet &vtkmDataset, vistle::Object::const_ptr grid)
+ModuleStatusPtr vtkmSetGrid(viskores::cont::DataSet &vtkmDataset, vistle::Object::const_ptr grid)
 {
     if (auto coords = Coords::as(grid)) {
-        auto coordinateSystem = vtkm::cont::CoordinateSystem(
+        auto coordinateSystem = viskores::cont::CoordinateSystem(
             "coordinate system",
-            vtkm::cont::make_ArrayHandleSOA(coords->x().handle(), coords->y().handle(), coords->z().handle()));
+            viskores::cont::make_ArrayHandleSOA(coords->x().handle(), coords->y().handle(), coords->z().handle()));
 
         vtkmDataset.AddCoordinateSystem(coordinateSystem);
 
@@ -177,24 +177,25 @@ VtkmTransformStatus vtkmSetGrid(vtkm::cont::DataSet &vtkmDataset, vistle::Object
         auto ny = uni->getNumDivisions(1);
         auto nz = uni->getNumDivisions(2);
         const auto *min = uni->min(), *dist = uni->dist();
-        vtkm::cont::ArrayHandleUniformPointCoordinates uniformCoordinates(
-            vtkm::Id3(nx, ny, nz), vtkm::Vec3f{min[0], min[1], min[2]}, vtkm::Vec3f{dist[0], dist[1], dist[2]});
-        auto coordinateSystem = vtkm::cont::CoordinateSystem("uniform", uniformCoordinates);
+        viskores::cont::ArrayHandleUniformPointCoordinates uniformCoordinates(
+            viskores::Id3(nx, ny, nz), viskores::Vec3f{min[0], min[1], min[2]},
+            viskores::Vec3f{dist[0], dist[1], dist[2]});
+        auto coordinateSystem = viskores::cont::CoordinateSystem("uniform", uniformCoordinates);
         vtkmDataset.AddCoordinateSystem(coordinateSystem);
     } else if (auto rect = RectilinearGrid::as(grid)) {
         auto xc = rect->coords(0).handle();
         auto yc = rect->coords(1).handle();
         auto zc = rect->coords(2).handle();
 
-        vtkm::cont::ArrayHandleCartesianProduct rectilinearCoordinates(xc, yc, zc);
-        auto coordinateSystem = vtkm::cont::CoordinateSystem("rectilinear", rectilinearCoordinates);
+        viskores::cont::ArrayHandleCartesianProduct rectilinearCoordinates(xc, yc, zc);
+        auto coordinateSystem = viskores::cont::CoordinateSystem("rectilinear", rectilinearCoordinates);
         vtkmDataset.AddCoordinateSystem(coordinateSystem);
     } else {
-        return VtkmTransformStatus::UNSUPPORTED_GRID_TYPE;
+        return Error("Found unsupported grid type while attempting to convert Vistle grid to Viskores dataset.");
     }
 
     auto stat = vtkmSetTopology(vtkmDataset, grid);
-    if (stat != VtkmTransformStatus::SUCCESS) {
+    if (!stat->continueExecution()) {
         return stat;
     }
     return vtkmApplyGhost(vtkmDataset, grid);
@@ -202,12 +203,12 @@ VtkmTransformStatus vtkmSetGrid(vtkm::cont::DataSet &vtkmDataset, vistle::Object
 
 namespace {
 struct AddField {
-    vtkm::cont::DataSet &dataset;
+    viskores::cont::DataSet &dataset;
     const DataBase::const_ptr &object;
     DataBase::Mapping mapping;
     const std::string &name;
     bool &handled;
-    AddField(vtkm::cont::DataSet &ds, const DataBase::const_ptr &obj, const std::string &name,
+    AddField(viskores::cont::DataSet &ds, const DataBase::const_ptr &obj, const std::string &name,
              DataBase::Mapping mapping, bool &handled)
     : dataset(ds), object(obj), mapping(mapping), name(name), handled(handled)
     {}
@@ -219,14 +220,14 @@ struct AddField {
         typedef Vec<S, 3> V3;
         //typedef Vec<S, 4> V4;
 
-        vtkm::cont::UnknownArrayHandle ah;
+        viskores::cont::UnknownArrayHandle ah;
         if (auto in = V1::as(object)) {
             ah = in->x().handle();
         } else if (auto in = V3::as(object)) {
             auto ax = in->x().handle();
             auto ay = in->y().handle();
             auto az = in->z().handle();
-            ah = vtkm::cont::make_ArrayHandleSOA(ax, ay, az);
+            ah = viskores::cont::make_ArrayHandleSOA(ax, ay, az);
         } else {
             return;
         }
@@ -246,33 +247,33 @@ struct AddField {
 };
 } // namespace
 
-VtkmTransformStatus vtkmAddField(vtkm::cont::DataSet &vtkmDataSet, const vistle::DataBase::const_ptr &field,
-                                 const std::string &name, vistle::DataBase::Mapping mapping)
+ModuleStatusPtr vtkmAddField(viskores::cont::DataSet &vtkmDataSet, const vistle::DataBase::const_ptr &field,
+                             const std::string &name, vistle::DataBase::Mapping mapping)
 {
     bool handled = false;
     boost::mpl::for_each<Scalars>(AddField(vtkmDataSet, field, name, mapping, handled));
     if (handled)
-        return VtkmTransformStatus::SUCCESS;
+        return Success();
 
-    return VtkmTransformStatus::UNSUPPORTED_FIELD_TYPE;
+    return Error("Encountered an unsupported field type while attempting to convert Vistle field to Viskores field.");
 }
 
 
-Object::ptr vtkmGetGeometry(const vtkm::cont::DataSet &dataset)
+Object::ptr vtkmGetGeometry(const viskores::cont::DataSet &dataset)
 {
     Object::ptr result = vtkmGetTopology(dataset);
 
     if (auto coords = Coords::as(result)) {
         auto uPointCoordinates = dataset.GetCoordinateSystem().GetData();
-        vtkm::cont::UnknownArrayHandle unknown(uPointCoordinates);
-        if (unknown.CanConvert<vtkm::cont::ArrayHandle<vtkm::Vec<Scalar, 3>>>()) {
-            auto vtkmCoord = unknown.AsArrayHandle<vtkm::cont::ArrayHandle<vtkm::Vec<Scalar, 3>>>();
+        viskores::cont::UnknownArrayHandle unknown(uPointCoordinates);
+        if (unknown.CanConvert<viskores::cont::ArrayHandle<viskores::Vec<Scalar, 3>>>()) {
+            auto vtkmCoord = unknown.AsArrayHandle<viskores::cont::ArrayHandle<viskores::Vec<Scalar, 3>>>();
             for (int d = 0; d < 3; ++d) {
                 auto x = make_ArrayHandleExtractComponent(vtkmCoord, d);
                 coords->d()->x[d]->setHandle(x);
             }
-        } else if (unknown.CanConvert<vtkm::cont::ArrayHandleSOA<vtkm::Vec3f>>()) {
-            auto vtkmCoord = unknown.AsArrayHandle<vtkm::cont::ArrayHandleSOA<vtkm::Vec3f>>();
+        } else if (unknown.CanConvert<viskores::cont::ArrayHandleSOA<viskores::Vec3f>>()) {
+            auto vtkmCoord = unknown.AsArrayHandle<viskores::cont::ArrayHandleSOA<viskores::Vec3f>>();
             for (int d = 0; d < 3; ++d) {
                 auto x = vtkmCoord.GetArray(d);
                 coords->d()->x[d]->setHandle(x);
@@ -300,14 +301,14 @@ struct Vistle;
         typedef vistle_t type; \
     }
 
-MAP(vtkm::Int8, vistle::Byte);
-MAP(vtkm::UInt8, vistle::Byte);
-MAP(vtkm::Int16, vistle::Index);
-MAP(vtkm::UInt16, vistle::Index);
-MAP(vtkm::Int32, vistle::Index);
-MAP(vtkm::UInt32, vistle::Index);
-MAP(vtkm::Int64, vistle::Index);
-MAP(vtkm::UInt64, vistle::Index);
+MAP(viskores::Int8, vistle::Byte);
+MAP(viskores::UInt8, vistle::Byte);
+MAP(viskores::Int16, vistle::Index);
+MAP(viskores::UInt16, vistle::Index);
+MAP(viskores::Int32, vistle::Index);
+MAP(viskores::UInt32, vistle::Index);
+MAP(viskores::Int64, vistle::Index);
+MAP(viskores::UInt64, vistle::Index);
 MAP(float, vistle::Scalar);
 MAP(double, vistle::Scalar);
 
@@ -318,25 +319,25 @@ struct GetArrayContents {
 
     GetArrayContents(vistle::DataBase::ptr &result): result(result) {}
 
-    template<typename V, vtkm::IdComponent Dim, typename T, typename S>
-    typename vistle::Vec<V, Dim>::ptr makeVec(const vtkm::cont::ArrayHandle<T, S> &array) const
+    template<typename V, viskores::IdComponent Dim, typename T, typename S>
+    typename vistle::Vec<V, Dim>::ptr makeVec(const viskores::cont::ArrayHandle<T, S> &array) const
     {
         auto data = std::make_shared<vistle::Vec<V, Dim>>(array.GetNumberOfValues());
         for (int i = 0; i < Dim; ++i) {
-            auto comp = vtkm::cont::make_ArrayHandleExtractComponent(array, i);
+            auto comp = viskores::cont::make_ArrayHandleExtractComponent(array, i);
             data->d()->x[i]->setHandle(comp);
         }
         return data;
     }
 
     template<typename T, typename S>
-    VTKM_CONT void operator()(const vtkm::cont::ArrayHandle<T, S> &array) const
+    VISKORES_CONT void operator()(const viskores::cont::ArrayHandle<T, S> &array) const
     {
         using ValueType = T;
-        using VTraits = vtkm::VecTraits<ValueType>;
+        using VTraits = viskores::VecTraits<ValueType>;
         typedef typename Vistle<typename VTraits::ComponentType>::type V;
         ValueType dummy{};
-        const vtkm::IdComponent numComponents = VTraits::GetNumberOfComponents(dummy);
+        const viskores::IdComponent numComponents = VTraits::GetNumberOfComponents(dummy);
         assert(!result);
         switch (numComponents) {
         case 1: {
@@ -362,21 +363,38 @@ struct GetArrayContents {
 };
 } // namespace
 
-vistle::DataBase::ptr vtkmGetField(const vtkm::cont::DataSet &vtkmDataSet, const std::string &name)
+vistle::DataBase::ptr vtkmGetField(const viskores::cont::DataSet &vtkmDataSet, const std::string &name,
+                                   vistle::DataBase::Mapping mapping)
 {
     vistle::DataBase::ptr result;
     if (!vtkmDataSet.HasField(name))
         return result;
 
-    auto field = vtkmDataSet.GetField(name);
+    viskores::cont::Field::Association assoc = viskores::cont::Field::Association::Any;
+    switch (mapping) {
+    case vistle::DataBase::Vertex:
+        assoc = viskores::cont::Field::Association::Points;
+        break;
+    case vistle::DataBase::Element:
+        assoc = viskores::cont::Field::Association::Cells;
+        break;
+    case vistle::DataBase::Unspecified:
+        // leave it at Any
+        break;
+    default:
+        assert("Invalid mapping type" == nullptr);
+        break;
+    }
+
+    auto field = vtkmDataSet.GetField(name, assoc);
     if (!field.IsCellField() && !field.IsPointField()) {
-        std::cerr << "VTK-m field " << name << " is neither point nor cell field" << std::endl;
+        std::cerr << "Viskores field " << name << " is neither point nor cell field" << std::endl;
         return result;
     }
     auto ah = field.GetData();
     try {
-        ah.CastAndCallForTypes<vtkm::TypeListAll, vtkm::cont::StorageListCommon>(GetArrayContents{result});
-    } catch (vtkm::cont::ErrorBadType &err) {
+        ah.CastAndCallForTypes<viskores::TypeListAll, viskores::cont::StorageListCommon>(GetArrayContents{result});
+    } catch (viskores::cont::ErrorBadType &err) {
         std::cerr << "cast error: " << err.what() << std::endl;
     }
     if (result) {

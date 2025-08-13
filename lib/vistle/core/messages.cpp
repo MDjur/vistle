@@ -486,12 +486,12 @@ int Spawn::migrateId() const
 
 void Spawn::setMirroringId(int id)
 {
-    setReference(id, ReferenceType::Mirror);
+    m_mirrorId = id;
 }
 
 int Spawn::mirroringId() const
 {
-    return m_referenceType == (int)ReferenceType::Mirror ? m_referenceId : Id::Invalid;
+    return m_mirrorId;
 }
 
 int Spawn::hubId() const
@@ -654,22 +654,32 @@ const char *CloseConnection::reason() const
     return m_reason.data();
 }
 
-ModuleExit::ModuleExit(bool crashed): forwarded(false), crashed(crashed)
+ModuleExit::ModuleExit(bool crashed): m_forwarded(0), m_crashed(crashed ? 1 : 0)
 {}
 
 void ModuleExit::setForwarded()
 {
-    forwarded = true;
+    m_forwarded = 1;
 }
 
 bool ModuleExit::isForwarded() const
 {
-    return forwarded;
+    return m_forwarded != 0;
 }
 
 bool ModuleExit::isCrashed() const
 {
-    return crashed;
+    return m_crashed != 0;
+}
+
+void ModuleExit::setLeaveMirrorGroup(bool leave)
+{
+    m_leaveMirrorGroup = leave ? 1 : 0;
+}
+
+bool ModuleExit::leaveMirrorGroup() const
+{
+    return m_leaveMirrorGroup != 0;
 }
 
 Screenshot::Screenshot(const std::string &filename, bool quit): m_quit(quit)
@@ -1576,6 +1586,10 @@ ItemInfo::ItemInfo(ItemInfo::InfoType type, const std::string port): m_infoType(
 {
     COPY_STRING(m_port, port);
 }
+ItemInfo::ItemInfo(const std::string &port, PortState state): m_infoType(ItemInfo::PortEnableState), m_infoFlag(state)
+{
+    COPY_STRING(m_port, port);
+}
 
 ItemInfo::InfoType ItemInfo::infoType() const
 {
@@ -1585,6 +1599,12 @@ ItemInfo::InfoType ItemInfo::infoType() const
 const char *ItemInfo::port() const
 {
     return m_port.data();
+}
+
+ItemInfo::PortState ItemInfo::portEnableState() const
+{
+    assert(m_infoType == ItemInfo::PortEnableState);
+    return ItemInfo::PortState(m_infoFlag);
 }
 
 ItemInfo::Payload::Payload() = default;
@@ -1910,9 +1930,15 @@ const Meta &SendObject::meta() const
 
 Object::Type SendObject::objectType() const
 {
+    assert(!isArray());
     return static_cast<Object::Type>(m_objectType);
 }
 
+int SendObject::arrayType() const
+{
+    assert(isArray());
+    return m_objectType;
+}
 
 Meta SendObject::objectMeta() const
 {
@@ -2093,6 +2119,12 @@ std::ostream &operator<<(std::ostream &s, const Message &m)
     case SPAWN: {
         auto &mm = static_cast<const Spawn &>(m);
         s << ", name: " << mm.getName() << ", id: " << mm.spawnId() << ", hub: " << mm.hubId();
+        if (mm.migrateId() != message::Id::Invalid) {
+            s << ", migrate: " << mm.migrateId();
+        }
+        if (mm.mirroringId() != message::Id::Invalid) {
+            s << ", mirror: " << mm.mirroringId();
+        }
         break;
     }
     case KILL: {
@@ -2140,6 +2172,9 @@ std::ostream &operator<<(std::ostream &s, const Message &m)
         auto &mm = static_cast<const ItemInfo &>(m);
         s << ", type: " << mm.infoType();
         s << ", port: " << mm.port();
+        if (mm.infoType() == ItemInfo::PortEnableState) {
+            s << ", state: " << ItemInfo::toString(mm.portEnableState());
+        }
         break;
     }
     case UPDATESTATUS: {
@@ -2183,6 +2218,16 @@ std::ostream &operator<<(std::ostream &s, const Message &m)
         auto &mm = static_cast<const Cover &>(m);
         s << ", mirror: " << mm.mirrorId() << ", sender: " << mm.sender() << ", sender type: " << mm.senderType()
           << ", subtype: " << mm.subType();
+        break;
+    }
+    case LOCKUI: {
+        auto &mm = static_cast<const LockUi &>(m);
+        s << ", locked: " << mm.locked();
+        break;
+    }
+    case SETNAME: {
+        auto &mm = static_cast<const SetName &>(m);
+        s << ", module: " << mm.module() << ", name: " << mm.name();
         break;
     }
     default:

@@ -11,6 +11,7 @@
 #include <vistle/core/triangles.h>
 #include <vistle/module/resultcache.h>
 #include <vistle/alg/objalg.h>
+#include <vistle/util/coRestraint.h>
 
 #include "ShowGrid.h"
 
@@ -20,9 +21,11 @@ using namespace vistle;
 
 ShowGrid::ShowGrid(const std::string &name, int moduleID, mpi::communicator comm): Module(name, moduleID, comm)
 {
-    createInputPort("grid_in", "grid or data mapped to grid");
-    createOutputPort("grid_out", "edges of grid cells");
+    auto pin = createInputPort("grid_in", "grid or data mapped to grid");
+    auto pout = createOutputPort("grid_out", "edges of grid cells");
+    linkPorts(pin, pout);
 
+    m_cells = addStringParameter("cells", "show cells with these indices", "all", Parameter::Restraint);
     m_cellScale = addFloatParameter("cell_scale", "factor for scaling cells around their center", 1.);
 
     addIntParameter("normalcells", "Show normal (non ghost) cells", 1, Parameter::Boolean);
@@ -39,6 +42,7 @@ ShowGrid::ShowGrid(const std::string &name, int moduleID, mpi::communicator comm
     addIntParameter("triangle", "Show triangle", 1, Parameter::Boolean);
     addIntParameter("bar", "Show bar", 1, Parameter::Boolean);
 
+    setCurrentParameterGroup("cell range", false);
     m_CellNrMin = addIntParameter("min_cell_index", "show cells starting from this index", -1);
     m_CellNrMax = addIntParameter("max_cell_index", "show cells up to this index", -1);
 
@@ -66,6 +70,8 @@ bool ShowGrid::compute()
 
     const Integer cellnrmin = m_CellNrMin->getValue();
     const Integer cellnrmax = m_CellNrMax->getValue();
+    coRestraint showCell;
+    showCell.add(m_cells->getValue());
 
     vistle::Scalar scaleFactor = m_cellScale->getValue();
 
@@ -107,6 +113,9 @@ bool ShowGrid::compute()
                 }
 
                 for (Index index = begin; index < end; ++index) {
+                    if (!showCell(index))
+                        continue;
+
                     auto type = unstr->tl()[index];
                     const bool ghost = unstr->isGhost(index);
 
@@ -208,6 +217,8 @@ bool ShowGrid::compute()
                                            : UnstructuredGrid::POINT;
 
                 for (Index index = begin; index < end; ++index) {
+                    if (!showCell(index))
+                        continue;
                     if (type == UnstructuredGrid::HEXAHEDRON && !showTypes[UnstructuredGrid::HEXAHEDRON])
                         continue;
                     if (type == UnstructuredGrid::QUAD && !showTypes[UnstructuredGrid::QUAD])
@@ -253,6 +264,8 @@ bool ShowGrid::compute()
                         end = std::min(cellnrmax + 1, (Integer)end);
 
                     for (Index index = begin; index < end; ++index) {
+                        if (!showCell(index))
+                            continue;
                         const bool ghost = poly->isGhost(index);
                         const bool show = ((showgho && ghost) || (shownor && !ghost));
                         if (!show)
@@ -303,6 +316,8 @@ bool ShowGrid::compute()
                         return icl ? icl[idx] : idx;
                     };
                     for (Index i = 0; i < nelem; ++i) {
+                        if (!showCell(i))
+                            continue;
                         const bool ghost = quad->isGhost(i);
                         const bool show = ((showgho && ghost) || (shownor && !ghost));
                         if (!show)
@@ -354,6 +369,8 @@ bool ShowGrid::compute()
                         return icl ? icl[idx] : idx;
                     };
                     for (Index i = 0; i < nelem; ++i) {
+                        if (!showCell(i))
+                            continue;
                         const bool ghost = tri->isGhost(i);
                         const bool show = ((showgho && ghost) || (shownor && !ghost));
                         if (!show)
@@ -404,6 +421,9 @@ bool ShowGrid::compute()
                 }
 
                 for (Index index = begin; index < end; ++index) {
+                    if (!showCell(index))
+                        continue;
+
                     auto type = unstr->tl()[index];
                     const bool ghost = unstr->isGhost(index);
 
@@ -486,6 +506,8 @@ bool ShowGrid::compute()
                                            : UnstructuredGrid::POINT;
 
                 for (Index index = begin; index < end; ++index) {
+                    if (!showCell(index))
+                        continue;
                     if (type == UnstructuredGrid::HEXAHEDRON && !showTypes[UnstructuredGrid::HEXAHEDRON])
                         continue;
                     if (type == UnstructuredGrid::QUAD && !showTypes[UnstructuredGrid::QUAD])
@@ -537,6 +559,8 @@ bool ShowGrid::compute()
                         end = std::min(cellnrmax + 1, (Integer)end);
 
                     for (Index index = begin; index < end; ++index) {
+                        if (!showCell(index))
+                            continue;
                         const bool ghost = poly->isGhost(index);
                         const bool show = ((showgho && ghost) || (shownor && !ghost));
                         if (!show)
@@ -561,6 +585,8 @@ bool ShowGrid::compute()
                     if (quad->getNumCorners() > 0) {
                         const Index *icl = &quad->cl()[0];
                         for (Index i = 0; i < nelem; ++i) {
+                            if (!showCell(i))
+                                continue;
                             const bool ghost = quad->isGhost(i);
                             const bool show = ((showgho && ghost) || (shownor && !ghost));
                             if (!show)
@@ -577,6 +603,8 @@ bool ShowGrid::compute()
                     } else {
                         nelem = quad->getNumVertices() / 4;
                         for (Index i = 0; i < nelem; ++i) {
+                            if (!showCell(i))
+                                continue;
                             const bool ghost = quad->isGhost(i);
                             const bool show = ((showgho && ghost) || (shownor && !ghost));
                             if (!show)
@@ -601,6 +629,8 @@ bool ShowGrid::compute()
                     if (tri->getNumCorners() > 0) {
                         const Index *icl = &tri->cl()[0];
                         for (Index i = 0; i < nelem; ++i) {
+                            if (!showCell(i))
+                                continue;
                             const bool ghost = tri->isGhost(i);
                             const bool show = ((showgho && ghost) || (shownor && !ghost));
                             if (!show)
@@ -616,6 +646,8 @@ bool ShowGrid::compute()
                     } else {
                         nelem = tri->getNumVertices() / 3;
                         for (Index i = 0; i < nelem; ++i) {
+                            if (!showCell(i))
+                                continue;
                             const bool ghost = tri->isGhost(i);
                             const bool show = ((showgho && ghost) || (shownor && !ghost));
                             if (!show)

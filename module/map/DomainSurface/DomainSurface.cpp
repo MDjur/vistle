@@ -9,6 +9,7 @@
 #include <vistle/core/structuredgrid.h>
 #include <vistle/module/resultcache.h>
 #include <vistle/alg/objalg.h>
+#include <vistle/alg/fields.h>
 #include <vistle/util/enum.h>
 
 #include "DomainSurface.h"
@@ -25,9 +26,11 @@ DEFINE_ENUM_WITH_STRING_CONVERSIONS(Algorithm, (IterateOverFaces)(IterateOverVer
 DomainSurface::DomainSurface(const std::string &name, int moduleID, mpi::communicator comm)
 : Module(name, moduleID, comm)
 {
-    createInputPort("data_in", "geometry or mapped data");
-    createOutputPort("data_out", "domain boundary with mapped data");
-    createOutputPort("lines_out", "outline/edges of domain boundary");
+    auto pin = createInputPort("data_in", "geometry or mapped data");
+    auto pout0 = createOutputPort("data_out", "domain boundary with mapped data");
+    auto pout1 = createOutputPort("lines_out", "outline/edges of domain boundary");
+    linkPorts(pin, pout0);
+    linkPorts(pin, pout1);
 
     addIntParameter("ghost", "Show ghostcells", 0, Parameter::Boolean);
     addIntParameter("tetrahedron", "Show tetrahedron", 1, Parameter::Boolean);
@@ -47,27 +50,6 @@ DomainSurface::DomainSurface(const std::string &name, int moduleID, mpi::communi
 
 DomainSurface::~DomainSurface()
 {}
-
-template<class T, int Dim>
-typename Vec<T, Dim>::ptr remapData(typename Vec<T, Dim>::const_ptr in, const DomainSurface::DataMapping &dm)
-{
-    typename Vec<T, Dim>::ptr out(new Vec<T, Dim>(dm.size()));
-
-    const T *data_in[Dim];
-    T *data_out[Dim];
-    for (int d = 0; d < Dim; ++d) {
-        data_in[d] = &in->x(d)[0];
-        data_out[d] = out->x(d).data();
-    }
-
-    for (Index i = 0; i < dm.size(); ++i) {
-        for (int d = 0; d < Dim; ++d) {
-            data_out[d][i] = data_in[d][dm[i]];
-        }
-    }
-
-    return out;
-}
 
 namespace {
 
@@ -225,23 +207,7 @@ bool DomainSurface::compute(const std::shared_ptr<BlockTask> &task) const
             continue;
         }
 
-        DataBase::ptr data_obj_out;
-        if (auto data_in = Vec<Scalar, 3>::as(data)) {
-            data_obj_out = remapData<Scalar, 3>(data_in, dm);
-        } else if (auto data_in = Vec<Scalar, 1>::as(data)) {
-            data_obj_out = remapData<Scalar, 1>(data_in, dm);
-        } else if (auto data_in = Vec<Index, 3>::as(data)) {
-            data_obj_out = remapData<Index, 3>(data_in, dm);
-        } else if (auto data_in = Vec<Index, 1>::as(data)) {
-            data_obj_out = remapData<Index, 1>(data_in, dm);
-        } else if (auto data_in = Vec<Byte, 3>::as(data)) {
-            data_obj_out = remapData<Byte, 3>(data_in, dm);
-        } else if (auto data_in = Vec<Byte, 1>::as(data)) {
-            data_obj_out = remapData<Byte, 1>(data_in, dm);
-        } else {
-            std::cerr << "WARNING: No valid 1D or 3D element data on input Port" << std::endl;
-        }
-
+        DataBase::ptr data_obj_out = remapData(data, dm, true);
         if (data_obj_out) {
             data_obj_out->setGrid(geo);
             data_obj_out->setMeta(data->meta());

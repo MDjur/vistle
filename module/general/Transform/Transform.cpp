@@ -35,6 +35,7 @@ Transform::Transform(const std::string &name, int moduleID, mpi::communicator co
 {
     data_in = createInputPort("data_in", "input data");
     data_out = createOutputPort("data_out", "output data");
+    linkPorts(data_in, data_out);
 
     p_rotation_axis_angle =
         addVectorParameter("rotation_axis_angle", "axis and angle of rotation", ParamVector(1., 0., 0., 0.));
@@ -175,6 +176,7 @@ bool Transform::compute()
     AnimationMode animation = (AnimationMode)p_animation->getValue();
     switch (animation) {
     case Animate:
+        timestep = -1;
         break;
     case Deanimate:
         timestep = -1;
@@ -222,6 +224,12 @@ bool Transform::compute()
             }
             addObject(data_out, nobj);
         }
+    }
+
+    switch (animation) {
+    case Animate:
+        timestep = 0;
+        break;
     }
 
     Matrix4 t = geo->getTransform();

@@ -387,6 +387,7 @@ ReadItlrBin::ReadItlrBin(const std::string &name, int moduleID, mpi::communicato
 
     for (int i = 0; i < NumPorts; ++i) {
         m_dataOut[i] = createOutputPort("data" + std::to_string(i), "data output");
+        linkPortAndParameter(m_dataOut[i], m_filename[i]);
     }
 
     setParallelizationMode(ParallelizeBlocks);
@@ -547,7 +548,7 @@ bool ReadItlrBin::read(Reader::Token &token, int timestep, int block)
         auto scal = readFieldBlock(filename.string(), block);
         if (scal) {
             scal->setGrid(m_grids[block]);
-            scal->addAttribute("_species", m_species[port]);
+            scal->addAttribute(attribute::Species, m_species[port]);
             token.applyMeta(scal);
             token.addObject(m_dataOut[port], scal);
         } else {

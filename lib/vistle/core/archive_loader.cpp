@@ -17,7 +17,7 @@ DeepArchiveFetcher::DeepArchiveFetcher(const std::map<std::string, buffer> &obje
 : m_objects(objects), m_arrays(arrays), m_compression(compressions), m_rawSize(sizes)
 {}
 
-void DeepArchiveFetcher::requestArray(const std::string &arname, int type,
+void DeepArchiveFetcher::requestArray(const std::string &arname, int localType, int remoteType,
                                       const ArrayCompletionHandler &completeCallback)
 {
     //std::cerr << "DeepArchiveFetcher: trying array " << arname << std::endl;
@@ -49,17 +49,18 @@ void DeepArchiveFetcher::requestArray(const std::string &arname, int type,
     try {
         iarchive ar(vb);
         ar.setFetcher(shared_from_this());
-        ArrayLoader loader(arname, type, ar);
+        ArrayLoader loader(arname, localType, ar);
         if (loader.load()) {
             //std::cerr << "DeepArchiveFetcher: success array " << arname << std::endl;
             m_ownedArrays.emplace(loader.owner());
             completeCallback(ar.translateArrayName(arname));
         } else {
-            std::cerr << "DeepArchiveFetcher: failed to load array " << arname << " of type " << type << std::endl;
+            std::cerr << "DeepArchiveFetcher: failed to load array " << arname << " of type " << localType
+                      << " (originally " << remoteType << ")" << std::endl;
         }
     } catch (std::exception &ex) {
         std::cerr << "DeepArchiveFetcher: exception " << ex.what() << " while loading array " << arname << " of type "
-                  << type << std::endl;
+                  << localType << " (originally " << remoteType << ")" << std::endl;
         throw ex;
     }
 }
@@ -202,12 +203,56 @@ std::ostream &operator<<(std::ostream &s, const DeepArchiveFetcher &daf)
     }
     return s;
 }
+template<typename T>
+struct Unreffer: public ArrayLoader::ArrayOwner {
+    explicit Unreffer(ShmVector<T> &ref): m_ref(ref) {}
+    ShmVector<T> m_ref;
+};
 
 ArrayLoader::ArrayLoader(const std::string &name, int type, const iarchive &ar)
 : m_ok(false), m_arname(name), m_type(type), m_ar(ar)
 {
     m_name = m_ar.translateArrayName(m_arname);
     //std::cerr << "ArrayLoader: loading array " << m_arname << ", translates to " << m_name << std::endl;
+}
+
+template<typename T>
+void ArrayLoader::operator()(T)
+{
+    if (shm_array<T, typename shm<T>::allocator>::typeId() != m_type) {
+        return;
+    }
+
+    if (m_ok) {
+        m_ok = false;
+        std::cerr << "ArrayLoader: multiple type matches for data array " << m_name << std::endl;
+        return;
+    }
+
+    if (!m_name.empty()) {
+        if (auto arr = Shm::the().getArrayFromName<T>(m_name)) {
+            std::cerr << "ArrayLoader: already have data array with name " << m_name << std::endl;
+            m_unreffer.reset(new Unreffer<T>(arr));
+            m_ok = true;
+            return;
+        }
+    }
+
+    auto &ar = const_cast<vistle::iarchive &>(m_ar);
+    std::string arname;
+    ar &arname;
+    assert(arname == m_arname);
+    m_name = ar.translateArrayName(arname);
+    auto arr = ShmVector<T>((shm_name_t)m_name);
+    if (!arr.valid())
+        arr.construct();
+    //std::cerr << "ArrayLoader: loading " << arname << " as " << m_name << ": arr=" << arr << std::endl;
+    m_name = arr.name().str();
+    ar.registerArrayNameTranslation(arname, arr.name());
+    //std::cerr << "ArrayLoader: constructed " << arname << " as " << arr.name() << std::endl;
+    ar &*arr;
+    m_unreffer.reset(new Unreffer<T>(arr));
+    m_ok = true;
 }
 
 bool ArrayLoader::load()
