@@ -14,6 +14,10 @@ VSGTimestepHandler::VSGTimestepHandler(vsg::ref_ptr<vsg::Viewer> in_viewer, int 
 
 void VSGTimestepHandler::addNode(vsg::ref_ptr<vsg::Node> geo, const int step)
 {
+    if (!geo) {
+        std::cerr << "VSGTimestepHandler: Tried to add null node!" << std::endl;
+        return;
+    }
     // timestep -1 is static
     if (step < 0)
         addThreadSafe(m_fixed, geo);

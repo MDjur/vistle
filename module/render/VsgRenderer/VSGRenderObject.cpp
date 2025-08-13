@@ -1,4 +1,5 @@
 #include "VSGRenderObject.h"
+#include <iostream>
 #include <sstream>
 #include <vistle/core/triangles.h>
 #include <vsg/core/Data.h>
@@ -37,7 +38,7 @@ VsgRenderObject::VsgRenderObject(int senderId, const std::string &senderPort, vi
     /* auto indices = vsg::ushortArray::create(); */
     vsg::ref_ptr<vsg::vec3Array> vertices;
     /* vsg::ref_ptr<vsg::vec2Array> texcoords; */
-    vsg::ref_ptr<vsg::vec4Array> colors;
+    vsg::ref_ptr<vsg::vec3Array> colors;
     vsg::ref_ptr<vsg::ushortArray> indices;
 
     // fill texture coordinates
@@ -101,8 +102,17 @@ VsgRenderObject::VsgRenderObject(int senderId, const std::string &senderPort, vi
         }
 
         debug << "Tri: #: " << numElem << ", #corners: " << numCorners << ", #coord: " << numCoords << std::endl;
+    } else {
+        std::cerr << "Unsupported geometry type" << std::endl;
+        return;
     }
 
+    if (!colors) {
+        // Fill with white color for each vertex
+        colors = vsg::vec3Array::create(vertices->size());
+        for (size_t i = 0; i < vertices->size(); ++i)
+            colors->set(i, vsg::vec3(1.0f, 1.0f, 1.0f));
+    }
     m_geometry->assignArrays(vsg::DataList{vertices, colors, texcoords});
     m_geometry->assignIndices(indices);
     // m_geometry->commands.push_back(vsg::DrawIndexed::create(vertices->size(), 1, 0, 0, 0));

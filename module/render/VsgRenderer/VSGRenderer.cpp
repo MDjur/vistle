@@ -279,8 +279,16 @@ std::vector<vsg::ref_ptr<vsg::StateCommand>> VSGRenderer::setupVulkanGraphicsPip
     // load shaders from vsgExamples => export VSG_FILE_PATH=<path to vsgExamples>/data
     vsg::ref_ptr<vsg::ShaderStage> vertexShader = vsg::ShaderStage::read(
         VK_SHADER_STAGE_VERTEX_BIT, "main", vsg::findFile("vert_PushConstants.spv", searchPaths));
+    if (!vertexShader) {
+        std::cerr << "Failed to load vertex shader" << std::endl;
+        return {};
+    }
     vsg::ref_ptr<vsg::ShaderStage> fragmentShader = vsg::ShaderStage::read(
         VK_SHADER_STAGE_FRAGMENT_BIT, "main", vsg::findFile("frag_PushConstants.spv", searchPaths));
+    if (!fragmentShader) {
+        std::cerr << "Failed to load fragment shader" << std::endl;
+        return {};
+    }
     auto pipelineLayout =
         vsg::PipelineLayout::create(vsg::DescriptorSetLayouts{descriptorSetLayout}, pushConstantRanges);
     auto graphicsPipeline =
@@ -395,9 +403,8 @@ std::shared_ptr<vistle::RenderObject> VSGRenderer::addObject(int senderId, const
                                                              vistle::Object::const_ptr texture)
 {
     auto vro = std::make_shared<VsgRenderObject>(senderId, senderPort, container, geometry, normals, texture);
-    // auto t = vro->timestep;
-    // m_timesteps->addNode(vro->geo(), t);
-    m_scenegraph->addChild(vro->geo());
+    auto t = vro->timestep;
+    m_timesteps->addNode(vro->geo(), t);
     m_renderManager.addObject(vro);
     return vro;
 }
@@ -405,9 +412,8 @@ std::shared_ptr<vistle::RenderObject> VSGRenderer::addObject(int senderId, const
 void VSGRenderer::removeObject(std::shared_ptr<vistle::RenderObject> ro)
 {
     auto vro = std::static_pointer_cast<VsgRenderObject>(ro);
-    // auto t = vro->timestep;
-    // m_timesteps->removeNode(vro->geo(), t);
-    // m_scenegraph->remove<vsg::ref_ptr<vsg::Geometry>>(vro->geo());
+    auto t = vro->timestep;
+    m_timesteps->removeNode(vro->geo(), t);
     m_renderManager.removeObject(vro);
 }
 
