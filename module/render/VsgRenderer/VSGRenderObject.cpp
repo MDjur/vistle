@@ -97,9 +97,8 @@ VsgRenderObject::VsgRenderObject(int senderId, const std::string &senderPort, vi
         for (auto i = 0; i < numElem; ++i) {
             for (auto j = 0; j < 3; ++j) {
                 uint32_t idx = j + i * 3;
-                // opengl counter clock wise winding order
-                // vulkan clockwise winding order
-                indices->at(idx) = triConnectivityList[(i + 1) * 3 - j - 1];
+
+                indices->at(idx) = triConnectivityList[idx];
             }
         }
 
@@ -113,7 +112,7 @@ VsgRenderObject::VsgRenderObject(int senderId, const std::string &senderPort, vi
         // Fill with white color for each vertex
         colors = vsg::vec3Array::create(vertices->size());
         for (size_t i = 0; i < vertices->size(); ++i)
-            colors->set(i, vsg::vec3(1.0f, 1.0f, 1.0f));
+            colors->set(i, vsg::vec3(0.0f, 0.0f, 0.0f));
     }
     m_geometry->assignArrays(vsg::DataList{vertices, colors, texcoords});
     m_geometry->assignIndices(indices);
