@@ -97,7 +97,9 @@ VsgRenderObject::VsgRenderObject(int senderId, const std::string &senderPort, vi
         for (auto i = 0; i < numElem; ++i) {
             for (auto j = 0; j < 3; ++j) {
                 uint32_t idx = j + i * 3;
-                indices->at(idx) = triConnectivityList[idx];
+                // opengl counter clock wise winding order
+                // vulkan clockwise winding order
+                indices->at(idx) = triConnectivityList[(i + 1) * 3 - j - 1];
             }
         }
 
